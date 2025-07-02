@@ -27,6 +27,12 @@ from beer_save_to_csv import (
     save_data_to_csv
 )
 
+from run import (
+    move_forward,
+    stop_and_lock_motors,
+    turn_right
+)
+
 if __name__ == '__main__':
     ep_robot = robot.Robot()
     ep_robot.initialize(conn_type="ap")
@@ -41,32 +47,19 @@ if __name__ == '__main__':
     ep_chassis.sub_esc(freq=20, callback=sub_info_esc)
     ep_chassis.sub_status(freq=50, callback=sub_info_status)
 
+
     # ทำลูป 4 รอบ
     for i in range(4):
         print(f"เริ่มรอบที่ {i+1}")
         
         # 1. เดินไปข้างหน้า 0.6 เมตร
-        print("เดินไปข้างหน้า 0.6 เมตร")
-        ep_chassis.move(x=0.6, y=0, z=0, xy_speed=0.7).wait_for_completed()
+        move_forward(ep_chassis, distance=0.6, speed=0.7)
         
-        # 2. หยุดและล็อคมอเตอร์ (ตั้งความเร็วเป็น 0)
-        print("หยุดและล็อคมอเตอร์")
-        ep_chassis.drive_speed(x=0, y=0, z=0)
-        time.sleep(2)  # หยุดพัก 2 วินาที
+        # 2. หยุดและล็อคมอเตอร์
+        stop_and_lock_motors(ep_chassis, sleep_time=2)
         
         # 3. เลี้ยวขวา 90 องศา
-        print("เลี้ยวขวา 90 องศา")
-        try:
-            ep_chassis.move(x=0, y=0, z=-90, z_speed=30).wait_for_completed()
-            print("เลี้ยวเสร็จแล้ว")
-        except Exception as e:
-            print(f"เกิดข้อผิดพลาดในการเลี้ยว: {e}")
-            
-        # หยุดและล็อคมอเตอร์อีกครั้งหลังเลี้ยว
-        print("หยุดและล็อคมอเตอร์หลังเลี้ยว")
-        ep_chassis.drive_speed(x=0, y=0, z=0)
-        ep_chassis.drive_wheels(w1=0, w2=0, w3=0, w4=0)  # หยุดล้อทั้งหมดอย่างชัดเจน
-        time.sleep(2)  # หยุดพัก 2 วินาที
+        turn_right(ep_chassis, angle=90, speed=25)
         
         print(f"เสร็จสิ้นรอบที่ {i+1}\n")
 
