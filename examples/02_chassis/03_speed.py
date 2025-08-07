@@ -20,7 +20,7 @@ from robomaster import robot
 
 if __name__ == '__main__':
     ep_robot = robot.Robot()
-    ep_robot.initialize(conn_type="sta")
+    ep_robot.initialize(conn_type="ap")
 
     ep_chassis = ep_robot.chassis
 
@@ -29,7 +29,7 @@ if __name__ == '__main__':
     z_val = 30
 
     # เคลื่อนที่ไปข้างหน้า 3 วินาที
-    ep_chassis.drive_speed(x=x_val, y=0, z=0, timeout=5)
+    ep_chassis.drive_speed(x=1, y=0, z=0, timeout=5)
     time.sleep(3)
 
     # ถอยหลัง 3 วินาที

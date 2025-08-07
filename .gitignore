@@ -4,3 +4,5 @@ dist
 src/robomaster.egg-info
 __pycache__
 /csv
+/devellope/csv_kim
+/devellope/mainkim
