@@ -29,8 +29,9 @@ from beer_save_to_csv import (
 
 from run import (
     move_forward,
-    stop_and_lock_motors,
-    turn_right
+    turn_right,
+    position_callback,  # เพิ่มการ import นี้
+    current_position    # เพิ่มการ import นี้
 )
 
 if __name__ == '__main__':
@@ -41,22 +42,21 @@ if __name__ == '__main__':
 
     # เริ่มเก็บข้อมูลเซ็นเซอร์
     print("เริ่มเก็บข้อมูลเซ็นเซอร์...")
-    ep_chassis.sub_position(freq=1, callback=sub_info_position)
+    ep_chassis.sub_position(freq=15, callback=position_callback)  # ใช้ position_callback แทน
     ep_chassis.sub_attitude(freq=5, callback=sub_info_attitude)
     ep_chassis.sub_imu(freq=10, callback=sub_info_imu)
     ep_chassis.sub_esc(freq=20, callback=sub_info_esc)
     ep_chassis.sub_status(freq=50, callback=sub_info_status)
 
+    # รอให้ข้อมูลอัปเดต
+    time.sleep(1)
 
     # ทำลูป 4 รอบ
     for i in range(4):
         print(f"เริ่มรอบที่ {i+1}")
         
         # 1. เดินไปข้างหน้า 0.6 เมตร
-        move_forward(ep_chassis, distance=0.6, speed=0.7)
-        
-        # 2. หยุดและล็อคมอเตอร์
-        stop_and_lock_motors(ep_chassis, sleep_time=2)
+        move_forward(ep_chassis, distance=0.6, speed=0.7, sensor=None)
         
         # 3. เลี้ยวขวา 90 องศา
         turn_right(ep_chassis, angle=90, speed=25)
