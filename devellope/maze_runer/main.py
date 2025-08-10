@@ -17,7 +17,11 @@ from controler.movement import (
     get_movement_stats,
     set_move_distance,
     detect_walls_at_current_position,
-    convert_blocked_directions_to_compass
+    # **import ระบบ calibration**
+    calibrate_initial_orientation,
+    get_real_direction_from_yaw,
+    get_target_yaw_for_direction
+    # **ลบ convert_blocked_directions_to_compass**
 )
 from controler.map import Graph, a_star_search, Node, calculate_direction
 
@@ -29,6 +33,100 @@ class MazeRunner:
         self.move_distance = 0.5
         set_move_distance(self.move_distance)
         
+        # **เพิ่ม: ระบบติดตามทิศทาง**
+        self.current_facing_direction = 'y+'  # เริ่มต้นหันหน้าทิศเหนือ
+        self.direction_history = []  # บันทึกประวัติการหมุน
+        
+        print(f"🧭 เริ่มต้นหันหน้าไปทิศ: {self.current_facing_direction} (เหนือ)")
+    
+    def update_facing_direction(self, turn_direction, angle=90):
+        """
+        อัปเดตทิศทางหลังจากหมุน
+        
+        Args:
+            turn_direction (str): 'right' หรือ 'left'
+            angle (float): มุมที่หมุน (องศา)
+        """
+        if angle != 90:
+            print(f"⚠️ รองรับเฉพาะการหมุน 90° เท่านั้น (ได้รับ {angle}°)")
+            return
+        
+        # ลำดับทิศทางสำหรับการหมุนขวา
+        right_sequence = ['y+', 'x+', 'y-', 'x-']  # เหนือ → ตะวันออก → ใต้ → ตะวันตก
+        
+        current_index = right_sequence.index(self.current_facing_direction)
+        
+        if turn_direction.lower() == 'right':
+            new_index = (current_index + 1) % 4
+        elif turn_direction.lower() == 'left':
+            new_index = (current_index - 1) % 4
+        else:
+            print(f"❌ ทิศทางการหมุนไม่ถูกต้อง: {turn_direction}")
+            return
+        
+        old_direction = self.current_facing_direction
+        self.current_facing_direction = right_sequence[new_index]
+        
+        # บันทึกประวัติ
+        self.direction_history.append({
+            'action': f'turn_{turn_direction}',
+            'from': old_direction,
+            'to': self.current_facing_direction,
+            'node': self.current_node_id
+        })
+        
+        direction_names = {
+            'y+': 'เหนือ', 'y-': 'ใต้', 'x+': 'ตะวันออก', 'x-': 'ตะวันตก'
+        }
+        
+        print(f"🔄 หมุน{turn_direction}: {direction_names[old_direction]} → {direction_names[self.current_facing_direction]}")
+        print(f"🧭 ตอนนี้หันหน้าไปทิศ: {self.current_facing_direction} ({direction_names[self.current_facing_direction]})")
+    
+    def verify_direction_from_movement(self, from_node_id, to_node_id):
+        """
+        ตรวจสอบทิศทางจากการเคลื่อนที่ระหว่างโหนด
+        """
+        if from_node_id is None or to_node_id is None:
+            return
+        
+        from_node = self.maze_map.nodes[from_node_id]
+        to_node = self.maze_map.nodes[to_node_id]
+        
+        dx = to_node.x - from_node.x
+        dy = to_node.y - from_node.y
+        
+        # คำนวณทิศทางจากการเคลื่อนที่
+        if abs(dx) > abs(dy):
+            actual_direction = 'x+' if dx > 0 else 'x-'
+        else:
+            actual_direction = 'y+' if dy > 0 else 'y-'
+        
+        direction_names = {
+            'y+': 'เหนือ', 'y-': 'ใต้', 'x+': 'ตะวันออก', 'x-': 'ตะวันตก'
+        }
+        
+        print(f"📊 ตรวจสอบทิศทาง:")
+        print(f"   - การเปลี่ยนแปลง: dx={dx:.3f}, dy={dy:.3f}")
+        print(f"   - ทิศทางจากการเคลื่อนที่: {actual_direction} ({direction_names[actual_direction]})")
+        print(f"   - ทิศทางที่จำไว้: {self.current_facing_direction} ({direction_names[self.current_facing_direction]})")
+        
+        if actual_direction == self.current_facing_direction:
+            print("✅ ทิศทางถูกต้อง!")
+        else:
+            print("⚠️ ทิศทางไม่ตรงกัน! แก้ไข...")
+            self.current_facing_direction = actual_direction
+            print(f"🔄 ปรับทิศทางเป็น: {actual_direction} ({direction_names[actual_direction]})")
+        
+        # บันทึกการตรวจสอบ
+        self.direction_history.append({
+            'action': 'verify_movement',
+            'from_node': from_node_id,
+            'to_node': to_node_id,
+            'expected': self.current_facing_direction,
+            'actual': actual_direction,
+            'correct': actual_direction == self.current_facing_direction
+        })
+    
     def get_real_position(self):
         """ดึงตำแหน่งจริงจากเซ็นเซอร์"""
         return get_current_position()
@@ -39,7 +137,7 @@ class MazeRunner:
         
         Args:
             is_exit (bool): เป็นทางออกหรือไม่
-            blocked_directions (list): รายการทิศทางที่เป็นทางตัน (manual)
+            blocked_directions (list): รายการทิศทางที่เป็นทางตัน (แกนจริง) เช่น ['x+', 'y-']
             auto_detect_walls (bool): ตรวจจับทางตันอัตโนมัติหรือไม่
         """
         x, y = self.get_real_position()
@@ -55,20 +153,20 @@ class MazeRunner:
         # รวมทางตันที่ตรวจพบกับที่ระบุ manual
         all_blocked = []
         if detected_walls:
-            compass_blocked = convert_blocked_directions_to_compass(detected_walls)
-            all_blocked.extend(compass_blocked)
-            print(f"🤖 ตรวจพบทางตันอัตโนมัติ: {detected_walls} → {compass_blocked}")
+            # **ไม่ต้องแปลงแล้ว ใช้แกนจริงโดยตรง**
+            all_blocked.extend(detected_walls)  
+            print(f"🤖 ตรวจพบทางตันอัตโนมัติ (แกนจริง): {detected_walls}")
             
         if blocked_directions:
             all_blocked.extend(blocked_directions)
-            print(f"👤 ระบุทางตัน manual: {blocked_directions}")
+            print(f"👤 ระบุทางตัน manual (แกนจริง): {blocked_directions}")
         
         # ลบรายการซ้ำ
         final_blocked = list(set(all_blocked))
         
         # แสดงข้อมูลทางตันรวม
         if final_blocked:
-            print(f"🚫 ทางตันรวม: {final_blocked}")
+            print(f"🚫 ทางตันรวม (แกนจริง): {final_blocked}")
         
         # แสดงสถิติการเคลื่อนที่
         stats = get_movement_stats()
@@ -148,8 +246,8 @@ class MazeRunner:
                 print("🔍 ตรวจจับทางตันเพิ่มเติมสำหรับโหนดเดิม...")
                 if auto_detect_walls:
                     detected_walls = detect_walls_at_current_position()
-                    compass_blocked = convert_blocked_directions_to_compass(detected_walls)
-                    for direction in compass_blocked:
+                    # **ใช้แกนจริงโดยตรง ไม่ต้องแปลง**
+                    for direction in detected_walls:
                         self.maze_map.add_blocked_direction_to_node(node_id, direction)
                 
                 if blocked_directions:
@@ -177,11 +275,17 @@ class MazeRunner:
         return node_id
     
     def explore_maze(self):
-        """สำรวจเขาวงกต พร้อมตรวจจับทางตันอัตโนมัติ"""
+        """สำรวจเขาวงกต พร้อม calibration"""
         print("🏁 เริ่มสำรวจเขาวงกต!")
         
-        # จุดเริ่มต้น - ตรวจจับทางตันอัตโนมัติ
-        start_node = self.add_node_here(auto_detect_walls=True)
+        # **เพิ่ม: Manual calibration หากต้องการ**
+        print("\n🧭 ตั้งค่าทิศทางเริ่มต้น...")
+        print("   ต้องการ manual calibration หรือไม่? (y/n)")
+        # สำหรับการทดสอบ ให้ใช้ manual calibration
+        # self.manual_calibrate_orientation()
+    
+        # จุดเริ่มต้น
+        start_node = self.add_node_here(auto_detect_walls=False)
         self.path_history.append(start_node)
         self.current_node_id = start_node
         
@@ -189,43 +293,46 @@ class MazeRunner:
         print("\n1️⃣ เดิน 3 ครั้ง")
         for i in range(3):
             print(f"\n--- ครั้งที่ {i+1} ---")
-            self.move_with_detection(auto_detect_walls=True)
+            self.move_with_detection(auto_detect_walls=False)
             time.sleep(0.3)
         
         # 2. เลี้ยวขวา + เดิน
         print("\n2️⃣ เลี้ยวขวา + เดิน")
-        self.move_with_detection("right", 90, auto_detect_walls=True)
+        self.move_with_detection("right", 90, auto_detect_walls=False)
         time.sleep(0.3)
         
         # 3. เลี้ยวขวา + เดิน
         print("\n3️⃣ เลี้ยวขวา + เดิน")
-        self.move_with_detection("right", 90, auto_detect_walls=True)
+        self.move_with_detection("right", 90, auto_detect_walls=False)
         time.sleep(0.3)
         
         # 4. เลี้ยวขวา + เดิน (ควรเจอโหนดเดิม)
         print("\n4️⃣ เลี้ยวขวา + เดิน")
-        self.move_with_detection("right", 90, auto_detect_walls=True)
+        self.move_with_detection("right", 90, auto_detect_walls=False)
         time.sleep(0.3)
         
         # 5. เดิน 2 ครั้ง
         print("\n5️⃣ เดิน 2 ครั้ง")
         for i in range(2):
             print(f"\n--- ครั้งที่ {i+1} ---")
-            self.move_with_detection(auto_detect_walls=True)
+            self.move_with_detection(auto_detect_walls=False)
             time.sleep(0.3)
         
         # เลี้ยวซ้าย 2 ครั้ง + เดิน
         print("\n6️⃣ เลี้ยวซ้าย + เดิน")
-        self.move_with_detection("left", 90, auto_detect_walls=True)
+        self.move_with_detection("left", 90, auto_detect_walls=False)
         time.sleep(0.3)
         
         print("\n7️⃣ เลี้ยวซ้าย + เดิน")
-        self.move_with_detection("left", 90, auto_detect_walls=True)
+        self.move_with_detection("left", 90, auto_detect_walls=False)
+        time.sleep(0.3)
+
+        self.move_with_detection(auto_detect_walls=False)
         time.sleep(0.3)
         
-        print("\n8️⃣ เดินสุดท้าย")
-        self.move_with_detection(auto_detect_walls=True)
-        time.sleep(0.3)
+        # print("\n8️⃣ เดินสุดท้าย")
+        # self.move_with_detection(auto_detect_walls=True)
+        # time.sleep(0.3)
         
         # กำหนดทางออก
         end_node = self.current_node_id
@@ -259,14 +366,29 @@ class MazeRunner:
         print(f"✅ เจอแล้ว! {distance:.1f}m")
         print(f"🗺️ เส้นทาง: {' -> '.join(map(str, path))}")
         
-        # เดินกลับ
-        self.walk_path(path)
+        # **เปลี่ยนจาก simple_walk_path เป็น smart_walk_path**
+        self.smart_walk_path(path)
         
         return path, distance
     
-    def walk_path(self, path):
-        """เดินตามเส้นทาง"""
-        print("\n🚶 เริ่มเดินกลับ")
+    def smart_walk_path(self, path):
+        """เดินตามเส้นทาง - ติดตามทิศทางปัจจุบันของหุ่นยนต์อย่างถูกต้อง"""
+        print("\n🚶 เริ่มเดินกลับ (ติดตามทิศทางจริง)")
+        
+        # **คำนวณทิศทางเริ่มต้นจากการสำรวจ**
+        # สำรวจ: เริ่มต้น y+ → เดิน 3 ครั้ง → หมุนขวา 3 ครั้ง → เดิน 2 ครั้ง → หมุนซ้าย 2 ครั้ง
+        # ทิศทางสุดท้าย: y+ → (หมุนขวา 3 ครั้ง) → y- → (หมุนซ้าย 2 ครั้ง) → y-
+        current_direction = 'y-'  # หันหน้าไปทิศใต้
+        
+        print(f"🧭 เริ่มต้นหันหน้าไปทิศ: {current_direction} (ใต้)")
+        
+        # แมปทิศทางและการหมุน
+        direction_names = {
+            'y+': 'เหนือ', 'y-': 'ใต้', 'x+': 'ตะวันออก', 'x-': 'ตะวันตก'
+        }
+        
+        # การหมุนจากทิศทางปัจจุบันไปทิศทางเป้าหมาย (หมุนขวา 90° เท่านั้น)
+        right_turn_sequence = ['y+', 'x+', 'y-', 'x-']  # ลำดับการหมุนขวา
         
         for i in range(len(path) - 1):
             current_node = self.maze_map.nodes[path[i]]
@@ -282,38 +404,119 @@ class MazeRunner:
             print(f"📍 จาก ({current_node.x:.3f}, {current_node.y:.3f}) "
                   f"ไป ({next_node.x:.3f}, {next_node.y:.3f})")
             print(f"📏 ระยะทาง: {distance:.3f}m")
+            print(f"📐 การเปลี่ยนแปลง: dx={dx:.3f}, dy={dy:.3f}")
             
-            # คำนวณทิศทางและหมุน
-            direction = calculate_direction(current_node, next_node)
-            current_yaw = get_current_orientation()
+            # คำนวณทิศทางที่ต้องการ
+            if abs(dx) > abs(dy):
+                target_direction = 'x+' if dx > 0 else 'x-'
+            else:
+                target_direction = 'y+' if dy > 0 else 'y-'
             
-            # คำนวณมุมเป้าหมาย
-            direction_angles = {'north': 0, 'east': 90, 'south': 180, 'west': -90}
-            target_angle = direction_angles.get(direction, 0)
+            print(f"🧭 ปัจจุบันหันหน้าไปทิศ: {current_direction} ({direction_names[current_direction]})")
+            print(f"🎯 ต้องการไปทิศ: {target_direction} ({direction_names[target_direction]})")
             
-            # คำนวณมุมที่ต้องหมุน
-            angle_diff = target_angle - current_yaw
-            while angle_diff > 180:
-                angle_diff -= 360
-            while angle_diff < -180:
-                angle_diff += 360
+            # คำนวณจำนวนครั้งที่ต้องหมุนขวา
+            current_index = right_turn_sequence.index(current_direction)
+            target_index = right_turn_sequence.index(target_direction)
             
-            print(f"🧭 ทิศทาง: {direction}, ต้องหมุน: {angle_diff:.1f}°")
+            # คำนวณจำนวนครั้งที่ต้องหมุนขวา
+            if target_index >= current_index:
+                turns_needed = target_index - current_index
+            else:
+                turns_needed = (4 - current_index) + target_index
             
-            # หมุนถ้าจำเป็น
-            if abs(angle_diff) > 5:
-                if angle_diff > 0:
-                    turn_left(abs(angle_diff))
-                else:
-                    turn_right(abs(angle_diff))
+            print(f"🔄 ต้องหมุนขวา {turns_needed} ครั้ง")
+            
+            # หมุน
+            for turn_num in range(turns_needed):
+                print(f"   🔄 หมุนขวา 90° (ครั้งที่ {turn_num + 1})")
+                turn_right(90)
+                time.sleep(0.2)
+            
+            # อัปเดตทิศทางปัจจุบัน
+            if turns_needed > 0:
+                current_direction = target_direction
+                print(f"✅ ตอนนี้หันหน้าไปทิศ: {current_direction} ({direction_names[current_direction]})")
+            else:
+                print("➡️ ไม่ต้องหมุน (ทิศทางถูกต้องแล้ว)")
             
             time.sleep(0.3)
             
             # เดิน
+            print(f"🚶 เดิน {distance:.3f}m ในทิศทาง {target_direction}")
             move_forward(distance)
             time.sleep(0.3)
-        
+            
+            # ตรวจสอบตำแหน่งหลังเดิน
+            final_pos = get_current_position()
+            print(f"📍 ตำแหน่งหลังเดิน: ({final_pos[0]:.3f}, {final_pos[1]:.3f})")
+            
+            # ตรวจสอบว่าเดินถูกทิศทางหรือไม่
+            end_dx = final_pos[0] - current_node.x
+            end_dy = final_pos[1] - current_node.y
+            
+            if target_direction == 'x+' and end_dx > 0:
+                print("✅ เดินถูกทิศทาง (ไปทิศตะวันออก)")
+            elif target_direction == 'x-' and end_dx < 0:
+                print("✅ เดินถูกทิศทาง (ไปทิศตะวันตก)")
+            elif target_direction == 'y+' and end_dy > 0:
+                print("✅ เดินถูกทิศทาง (ไปทิศเหนือ)")
+            elif target_direction == 'y-' and end_dy < 0:
+                print("✅ เดินถูกทิศทาง (ไปทิศใต้)")
+            else:
+                print("⚠️ เดินผิดทิศทาง!")
+    
         print("🏠 ถึงบ้านแล้ว!")
+
+    def manual_calibrate_orientation(self):
+        """
+        Calibrate ทิศทางแบบ manual โดยดูการเคลื่อนที่จริง
+        """
+        print("\n🧭 กำลัง calibrate ทิศทางแบบ manual...")
+        
+        # บันทึกตำแหน่งเริ่มต้น
+        start_pos = get_current_position()
+        start_yaw = get_current_orientation()
+        
+        print(f"📍 ตำแหน่งเริ่มต้น: ({start_pos[0]:.3f}, {start_pos[1]:.3f})")
+        print(f"🧭 มุมเริ่มต้น: {start_yaw:.1f}°")
+        
+        # เดินทดสอบ
+        print("🚶 เดินทดสอบเพื่อ calibrate...")
+        move_forward(0.2)  # เดิน 20cm
+        
+        # ตรวจสอบการเปลี่ยนแปลง
+        end_pos = get_current_position()
+        dx = end_pos[0] - start_pos[0]
+        dy = end_pos[1] - start_pos[1]
+        
+        print(f"📍 ตำแหน่งหลังเดิน: ({end_pos[0]:.3f}, {end_pos[1]:.3f})")
+        print(f"📐 การเปลี่ยนแปลง: dx={dx:.3f}, dy={dy:.3f}")
+        
+        # กำหนดทิศทางจริงจากการเคลื่อนที่
+        if abs(dx) > abs(dy):
+            if dx > 0:
+                real_direction = 'x+'  # เคลื่อนที่ไปทิศตะวันออก
+                print("🧭 หุ่นยนต์หันหน้าไปทิศตะวันออก (x+)")
+            else:
+                real_direction = 'x-'  # เคลื่อนที่ไปทิศตะวันตก
+                print("🧭 หุ่นยนต์หันหน้าไปทิศตะวันตก (x-)")
+        else:
+            if dy > 0:
+                real_direction = 'y+'  # เคลื่อนที่ไปทิศเหนือ
+                print("🧭 หุ่นยนต์หันหน้าไปทิศเหนือ (y+)")
+            else:
+                real_direction = 'y-'  # เคลื่อนที่ไปทิศใต้
+                print("🧭 หุ่นยนต์หันหน้าไปทิศใต้ (y-)")
+        
+        # Calibrate ด้วยทิศทางที่ตรวจพบ
+        calibrate_initial_orientation(real_direction)
+        
+        # กลับตำแหน่งเดิม
+        print("🔙 กลับตำแหน่งเดิม...")
+        move_forward(-0.2)  # ถอยหลัง
+        
+        print("✅ Manual calibration เสร็จสิ้น!")
 
 def main():
     print("🤖 เริ่มระบบ...")

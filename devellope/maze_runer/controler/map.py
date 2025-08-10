@@ -16,24 +16,30 @@ class Node:
     
     def add_blocked_direction(self, direction):
         """เพิ่มทิศทางที่เป็นทางตัน"""
-        valid_directions = {'north', 'south', 'east', 'west'}
-        if direction.lower() in valid_directions:
-            self.blocked_directions.add(direction.lower())
-            print(f"🚫 โหนด {self.id}: เพิ่มทางตัน {direction}")
+        valid_directions = {'x+', 'x-', 'y+', 'y-'}  # **แก้ไข: ใช้แกนจริง**
+        if direction in valid_directions:
+            self.blocked_directions.add(direction)
+            direction_names = {
+                'x+': 'ทิศตะวันออก (X+)',
+                'x-': 'ทิศตะวันตก (X-)', 
+                'y+': 'ทิศเหนือ (Y+)',
+                'y-': 'ทิศใต้ (Y-)'
+            }
+            print(f"🚫 โหนด {self.id}: เพิ่มทางตัน {direction} ({direction_names[direction]})")
     
     def remove_blocked_direction(self, direction):
         """ลบทิศทางทางตัน"""
-        if direction.lower() in self.blocked_directions:
-            self.blocked_directions.remove(direction.lower())
+        if direction in self.blocked_directions:
+            self.blocked_directions.remove(direction)
             print(f"✅ โหนด {self.id}: ลบทางตัน {direction}")
     
     def is_blocked_direction(self, direction):
         """ตรวจสอบว่าทิศทางนั้นเป็นทางตันหรือไม่"""
-        return direction.lower() in self.blocked_directions
+        return direction in self.blocked_directions
     
     def get_available_directions(self):
         """ดึงทิศทางที่สามารถไปได้"""
-        all_directions = {'north', 'south', 'east', 'west'}
+        all_directions = {'x+', 'x-', 'y+', 'y-'}  # **แก้ไข: ใช้แกนจริง**
         return all_directions - self.blocked_directions
     
     def __repr__(self):
@@ -77,15 +83,15 @@ class Graph:
             print(f"❌ ไม่สามารถเชื่อมโหนด {node1_id} และ {node2_id} ได้")
 
 def calculate_direction(from_node, to_node):
-    """คำนวณทิศทางจากโหนดหนึ่งไปอีกโหนดหนึ่ง"""
+    """คำนวณทิศทางจากโหนดหนึ่งไปอีกโหนดหนึ่ง - ใช้แกนจริง"""
     dx = to_node.x - from_node.x
     dy = to_node.y - from_node.y
     
-    # ตรวจสอบทิศทางหลัก
+    # ตรวจสอบทิศทางตามแกนจริง
     if abs(dx) > abs(dy):
-        return 'east' if dx > 0 else 'west'
+        return 'x+' if dx > 0 else 'x-'  # **แก้ไข: ใช้แกนจริง**
     else:
-        return 'north' if dy > 0 else 'south'
+        return 'y+' if dy > 0 else 'y-'  # **แก้ไข: ใช้แกนจริง**
 
 def heuristic(node1, node2):
     """คำนวณระยะทางแบบยุคลิด"""
