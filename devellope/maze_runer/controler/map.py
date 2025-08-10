@@ -1,139 +1,146 @@
-import heapq
+# -*-coding:utf-8-*-
 import math
+import heapq
 
-# =======================================================
-# == ส่วนที่ 1: คลาส Node และ Graph (โค้ดเดิมของคุณ) ==
-# =======================================================
 class Node:
     def __init__(self, node_id, x, y, is_exit=False):
-        self.id = node_id          # ID ของโหนด (เช่น 0, 1, 2)
-        self.x = x                 # พิกัด X (สำหรับคำนวณ Heuristic)
-        self.y = y                 # พิกัด Y
-        self.is_exit = is_exit     # True ถ้าเป็นทางออก
-        self.connections = {}      # Dictionary เก็บเส้นเชื่อม: {neighbor_id: distance}
+        self.id = node_id
+        self.x = x
+        self.y = y
+        self.is_exit = is_exit
+        self.connections = {}  # {neighbor_id: distance}
+        
+        # **เพิ่ม: ระบบระบุทางตัน**
+        self.blocked_directions = set()  # เก็บทิศทางที่เป็นทางตัน
+        # ทิศทาง: 'north', 'south', 'east', 'west'
     
-    # เพิ่ม repr เพื่อให้ print object แล้วแสดงผลสวยงาม
+    def add_blocked_direction(self, direction):
+        """เพิ่มทิศทางที่เป็นทางตัน"""
+        valid_directions = {'north', 'south', 'east', 'west'}
+        if direction.lower() in valid_directions:
+            self.blocked_directions.add(direction.lower())
+            print(f"🚫 โหนด {self.id}: เพิ่มทางตัน {direction}")
+    
+    def remove_blocked_direction(self, direction):
+        """ลบทิศทางทางตัน"""
+        if direction.lower() in self.blocked_directions:
+            self.blocked_directions.remove(direction.lower())
+            print(f"✅ โหนด {self.id}: ลบทางตัน {direction}")
+    
+    def is_blocked_direction(self, direction):
+        """ตรวจสอบว่าทิศทางนั้นเป็นทางตันหรือไม่"""
+        return direction.lower() in self.blocked_directions
+    
+    def get_available_directions(self):
+        """ดึงทิศทางที่สามารถไปได้"""
+        all_directions = {'north', 'south', 'east', 'west'}
+        return all_directions - self.blocked_directions
+    
     def __repr__(self):
-        return f"Node(id={self.id}, pos=({self.x},{self.y}), exit={self.is_exit})"
+        blocked_str = f", blocked={list(self.blocked_directions)}" if self.blocked_directions else ""
+        return f"Node(id={self.id}, pos=({self.x},{self.y}), exit={self.is_exit}{blocked_str})"
 
 class Graph:
     def __init__(self):
-        self.nodes = {}            # Dictionary เก็บโหนดทั้งหมด: {node_id: Node_object}
+        self.nodes = {}
         self.node_count = 0
 
-    def add_node(self, x, y, is_exit=False):
+    def add_node(self, x, y, is_exit=False, blocked_directions=None):
+        """เพิ่มโหนดพร้อมระบุทางตัน"""
         new_id = self.node_count
         new_node = Node(new_id, x, y, is_exit)
+        
+        # เพิ่มทางตันถ้ามี
+        if blocked_directions:
+            for direction in blocked_directions:
+                new_node.add_blocked_direction(direction)
+        
         self.nodes[new_id] = new_node
         self.node_count += 1
-        print(f"พบโหนดใหม่: {new_node}")
+        print(f"📍 พบโหนดใหม่: {new_node}")
         return new_id
+    
+    def add_blocked_direction_to_node(self, node_id, direction):
+        """เพิ่มทางตันให้โหนดที่มีอยู่แล้ว"""
+        if node_id in self.nodes:
+            self.nodes[node_id].add_blocked_direction(direction)
+        else:
+            print(f"❌ ไม่พบโหนด {node_id}")
 
-    def add_edge(self, from_node_id, to_node_id, distance):
-        # สร้างเส้นเชื่อมไป-กลับ (Undirected Graph)
-        if from_node_id in self.nodes and to_node_id in self.nodes:
-            self.nodes[from_node_id].connections[to_node_id] = distance
-            self.nodes[to_node_id].connections[from_node_id] = distance
-            print(f"สร้างเส้นทางระหว่างโหนด {from_node_id} <-> {to_node_id} (ระยะทาง: {distance})")
+    def add_edge(self, node1_id, node2_id, distance):
+        """เชื่อมโหนดสองโหนด"""
+        if node1_id in self.nodes and node2_id in self.nodes:
+            self.nodes[node1_id].connections[node2_id] = distance
+            self.nodes[node2_id].connections[node1_id] = distance
+            print(f"🔗 สร้างเส้นทางระหว่างโหนด {node1_id} <-> {node2_id} (ระยะทาง: {distance})")
+        else:
+            print(f"❌ ไม่สามารถเชื่อมโหนด {node1_id} และ {node2_id} ได้")
 
-# ============================================================
-# == ส่วนที่ 2: อัลกอริทึมค้นหาเส้นทาง A* (ส่วนที่เพิ่มเข้ามา) ==
-# ============================================================
+def calculate_direction(from_node, to_node):
+    """คำนวณทิศทางจากโหนดหนึ่งไปอีกโหนดหนึ่ง"""
+    dx = to_node.x - from_node.x
+    dy = to_node.y - from_node.y
+    
+    # ตรวจสอบทิศทางหลัก
+    if abs(dx) > abs(dy):
+        return 'east' if dx > 0 else 'west'
+    else:
+        return 'north' if dy > 0 else 'south'
+
 def heuristic(node1, node2):
-    # คำนวณระยะทางแบบยุคลิด (Euclidean distance) เพื่อใช้เป็นค่า Heuristic
+    """คำนวณระยะทางแบบยุคลิด"""
     return math.sqrt((node1.x - node2.x)**2 + (node1.y - node2.y)**2)
 
-def a_star_search(graph, start_node_id, goal_node_id):
-    """
-    ค้นหาเส้นทางจาก start ไปยัง goal โดยใช้อัลกอริทึม A*
-    """
-    start_node = graph.nodes[start_node_id]
-    goal_node = graph.nodes[goal_node_id]
-
-    # Priority queue สำหรับเก็บ (f_score, node_id)
-    open_set = [(0, start_node_id)] 
+def a_star_search(graph, start_id, goal_id):
+    """A* search algorithm พร้อมพิจารณาทางตัน"""
+    if start_id not in graph.nodes or goal_id not in graph.nodes:
+        print(f"❌ โหนดเริ่มต้น ({start_id}) หรือโหนดเป้าหมาย ({goal_id}) ไม่พบ")
+        return None, 0
     
-    # Dictionary สำหรับติดตามเส้นทางย้อนกลับ
+    start_node = graph.nodes[start_id]
+    goal_node = graph.nodes[goal_id]
+    
+    open_set = [(0, start_id)]
     came_from = {}
+    g_score = {start_id: 0}
+    f_score = {start_id: heuristic(start_node, goal_node)}
     
-    # g_score คือระยะทางจริงจากจุดเริ่มต้นมายังโหนดปัจจุบัน
-    g_score = {node_id: float('inf') for node_id in graph.nodes}
-    g_score[start_node_id] = 0
-    
-    # f_score คือ g_score + heuristic (ค่าประมาณระยะทางจากโหนดปัจจุบันไปยังเป้าหมาย)
-    f_score = {node_id: float('inf') for node_id in graph.nodes}
-    f_score[start_node_id] = heuristic(start_node, goal_node)
-
     while open_set:
-        # ดึงโหนดที่มี f_score ต่ำที่สุดออกจาก queue
-        _, current_id = heapq.heappop(open_set)
-
-        # ถ้าถึงเป้าหมายแล้ว ให้สร้างเส้นทางและส่งคืน
-        if current_id == goal_node_id:
+        current_f, current_id = heapq.heappop(open_set)
+        
+        if current_id == goal_id:
+            # สร้างเส้นทาง
             path = []
-            total_distance = g_score[current_id]
+            total_distance = g_score[goal_id]
+            
             while current_id in came_from:
                 path.append(current_id)
                 current_id = came_from[current_id]
-            path.append(start_node_id)
-            return path[::-1], total_distance # คืนค่าเส้นทาง (เรียงจาก start -> goal) และระยะทางรวม
-
-        # สำรวจโหนดเพื่อนบ้าน
-        current_node = graph.nodes[current_id]
-        for neighbor_id, distance in current_node.connections.items():
-            # คำนวณ g_score ของเพื่อนบ้านผ่านโหนดปัจจุบัน
-            tentative_g_score = g_score[current_id] + distance
+            path.append(start_id)
+            path.reverse()
             
-            # ถ้าเส้นทางนี้ดีกว่าเส้นทางเดิมที่เคยพบ
-            if tentative_g_score < g_score[neighbor_id]:
+            return path, total_distance
+        
+        current_node = graph.nodes[current_id]
+        
+        for neighbor_id, edge_distance in current_node.connections.items():
+            neighbor_node = graph.nodes[neighbor_id]
+            
+            # **ตรวจสอบทางตัน**
+            direction_to_neighbor = calculate_direction(current_node, neighbor_node)
+            if current_node.is_blocked_direction(direction_to_neighbor):
+                print(f"🚫 ข้าม: {current_id} -> {neighbor_id} (ทิศ {direction_to_neighbor} เป็นทางตัน)")
+                continue
+            
+            tentative_g_score = g_score[current_id] + edge_distance
+            
+            if neighbor_id not in g_score or tentative_g_score < g_score[neighbor_id]:
                 came_from[neighbor_id] = current_id
                 g_score[neighbor_id] = tentative_g_score
-                f_score[neighbor_id] = tentative_g_score + heuristic(graph.nodes[neighbor_id], goal_node)
+                f_score[neighbor_id] = tentative_g_score + heuristic(neighbor_node, goal_node)
                 
-                # เพิ่มเพื่อนบ้านลงใน open_set เพื่อสำรวจต่อไป
-                heapq.heappush(open_set, (f_score[neighbor_id], neighbor_id))
-
-    return None, 0 # หากไม่พบเส้นทาง
-
-# =================================================
-# == ส่วนที่ 3: จำลองสถานการณ์ (ส่วนที่เพิ่มเข้ามา) ==
-# =================================================
-def simulate():
-    print("--- 1. เริ่มการจำลอง: สร้างแผนที่ (Graph) ---")
-    maze_map = Graph()
-
-    # --- ขั้นตอนการเจอโหนดและสร้างแผนที่ ---
-    # สมมติว่าหุ่นยนต์เคลื่อนที่ไปเจอโหนดต่างๆ และวัดระยะทาง
-    start_id = maze_map.add_node(x=0, y=0)                 # โหนด 0 (จุดเริ่มต้น)
-    node1_id = maze_map.add_node(x=10, y=0)                # โหนด 1
-    node2_id = maze_map.add_node(x=10, y=10)               # โหนด 2
-    node3_id = maze_map.add_node(x=0, y=10)                # โหนด 3
-    exit_id  = maze_map.add_node(x=20, y=10, is_exit=True) # โหนด 4 (ทางออก)
-    node5_id = maze_map.add_node(x=0, y=20)                # โหนด 5 (ทางตัน)
-
-    print("\n--- 2. สร้างเส้นทางเชื่อมระหว่างโหนด ---")
-    maze_map.add_edge(start_id, node1_id, 10)
-    maze_map.add_edge(start_id, node3_id, 10)
-    maze_map.add_edge(node1_id, node2_id, 10)
-    maze_map.add_edge(node3_id, node2_id, 10)
-    maze_map.add_edge(node2_id, exit_id, 10) # เส้นทางไปทางออก
-    maze_map.add_edge(node3_id, node5_id, 10) # เส้นทางไปทางตัน
-
-    # --- ขั้นตอนการค้นหาทางออก ---
-    print(f"\n--- 3. ค้นหาเส้นทางจากโหนด {start_id} ไปยังทางออก (โหนด {exit_id}) ---")
-    path, distance = a_star_search(maze_map, start_id, exit_id)
-
-    if path:
-        print(f"✅ พบเส้นทางแล้ว! ระยะทางรวม: {distance:.2f}")
-        print(f"เส้นทางที่ต้องเดิน: {' -> '.join(map(str, path))}")
-
-        # --- ขั้นตอนการย้อนกลับ ---
-        print("\n--- 4. การเดินทางย้อนกลับ (Backtracking) ---")
-        backtrack_path = path[::-1] # แค่ทำการกลับลำดับของ list
-        print(f"หากต้องการย้อนกลับจากทางออก: {' -> '.join(map(str, backtrack_path))}")
-    else:
-        print("❌ ไม่พบเส้นทางไปยังทางออก")
-
-# # เริ่มการทำงาน
-# if __name__ == "__main__":
-#     simulate()
+                if (f_score[neighbor_id], neighbor_id) not in open_set:
+                    heapq.heappush(open_set, (f_score[neighbor_id], neighbor_id))
+    
+    print(f"❌ ไม่พบเส้นทางจาก {start_id} ไป {goal_id}")
+    return None, 0
