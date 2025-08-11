@@ -111,6 +111,8 @@ def a_star_search(graph, start_id, goal_id):
     g_score = {start_id: 0}
     f_score = {start_id: heuristic(start_node, goal_node)}
     
+    print(f"🔍 A* Search: {start_id} -> {goal_id}")
+    
     while open_set:
         current_f, current_id = heapq.heappop(open_set)
         
@@ -128,15 +130,17 @@ def a_star_search(graph, start_id, goal_id):
             return path, total_distance
         
         current_node = graph.nodes[current_id]
+        print(f"🔍 ตรวจสอบโหนด {current_id} (blocked: {list(current_node.blocked_directions)})")
         
         for neighbor_id, edge_distance in current_node.connections.items():
             neighbor_node = graph.nodes[neighbor_id]
             
-            # **ตรวจสอบทางตัน**
-            direction_to_neighbor = calculate_direction(current_node, neighbor_node)
-            if current_node.is_blocked_direction(direction_to_neighbor):
-                print(f"🚫 ข้าม: {current_id} -> {neighbor_id} (ทิศ {direction_to_neighbor} เป็นทางตัน)")
-                continue
+            # **แก้ไข: ตรวจสอบทิศทางจากการเชื่อมต่อ ไม่ใช่จากพิกัด**
+            print(f"   -> เช็คเพื่อนบ้าน {neighbor_id}")
+            print(f"      มีการเชื่อมต่อแล้ว = สามารถไปได้")
+            
+            # ถ้ามีการเชื่อมต่อแปลว่าไปได้ (ไม่ต้องเช็ค blocked_directions)
+            # เพราะการเชื่อมต่อเกิดขึ้นตอนที่ยังไม่มีกำแพงขวาง
             
             tentative_g_score = g_score[current_id] + edge_distance
             
@@ -147,6 +151,7 @@ def a_star_search(graph, start_id, goal_id):
                 
                 if (f_score[neighbor_id], neighbor_id) not in open_set:
                     heapq.heappush(open_set, (f_score[neighbor_id], neighbor_id))
+                    print(f"      ✅ เพิ่ม {neighbor_id} ลงใน open_set")
     
     print(f"❌ ไม่พบเส้นทางจาก {start_id} ไป {goal_id}")
     return None, 0

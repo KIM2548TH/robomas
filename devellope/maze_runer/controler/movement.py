@@ -97,18 +97,6 @@ def sub_attitude_handler(attitude_info):
 
 
 
-def convert_blocked_directions_to_compass(blocked_list):
-    """
-    แปลง blocked directions จาก ['x+', 'y-'] เป็น ['east', 'south']
-    """
-    conversion = {
-        'x+': 'east',
-        'x-': 'west', 
-        'y+': 'north',
-        'y-': 'south'
-    }
-    
-    return [conversion.get(direction) for direction in blocked_list if direction in conversion]
 
 # ===== CORE MOVEMENT FUNCTIONS =====
 
@@ -197,10 +185,10 @@ def _turn(direction, angle):
     
     if direction.lower() == "right":
         print(f"↪️ หมุนขวา {angle}°")
-        angle_multiplier = -1
+        angle_multiplier = 1
     elif direction.lower() == "left":
         print(f"↩️ หมุนซ้าย {angle}°")
-        angle_multiplier = 1
+        angle_multiplier = -1
     else:
         print("❌ ทิศทางไม่ถูกต้อง!")
         return
@@ -294,7 +282,7 @@ def set_move_distance(distance):
 
 # ===== INITIALIZATION =====
 
-def calibrate_initial_orientation(facing_direction='y+'):
+def calibrate_initial_orientation(facing_direction='x+'):
     """
     Calibrate ทิศทางเริ่มต้นของหุ่นยนต์
     
@@ -305,12 +293,12 @@ def calibrate_initial_orientation(facing_direction='y+'):
     
     current_yaw = current_attitude[2]
     
-    # แมปทิศทางจริงกับมุม
+    # แมปทิศทางจริงกับมุม - เปลี่ยนให้ตรงกับ main.py
     direction_to_angle = {
-        'y+': 0,    # เหนือ
-        'x+': 90,   # ตะวันออก
-        'y-': 180,  # ใต้
-        'x-': -90   # ตะวันตก
+        'x+': 0,    # ตะวันออก (เริ่มต้น)
+        'y-': 90,   # ใต้
+        'x-': 180,  # ตะวันตก
+        'y+': -90   # เหนือ
     }
     
     expected_angle = direction_to_angle.get(facing_direction, 0)
@@ -336,62 +324,9 @@ def calibrate_initial_orientation(facing_direction='y+'):
     print(f"   - Offset: {offset:.1f}°")
     print("✅ Calibration เสร็จสิ้น")
 
-def get_real_direction_from_yaw(current_yaw):
-    """
-    แปลงมุม yaw เป็นทิศทางจริงตาม calibration
-    """
-    if not orientation_calibration['is_calibrated']:
-        print("⚠️ ยังไม่ได้ calibrate! ใช้ค่าเริ่มต้น")
-        return 'y+'
-    
-    # คำนวณมุมจริงหลัง calibration
-    real_angle = current_yaw + orientation_calibration['direction_offset']
-    
-    # ปรับให้อยู่ในช่วง -180 ถึง 180
-    while real_angle > 180:
-        real_angle -= 360
-    while real_angle < -180:
-        real_angle += 360
-    
-    # แปลงมุมเป็นทิศทาง
-    if -45 <= real_angle <= 45:
-        return 'y+'  # เหนือ
-    elif 45 < real_angle <= 135:
-        return 'x+'  # ตะวันออก
-    elif 135 < real_angle <= 180 or -180 <= real_angle < -135:
-        return 'y-'  # ใต้
-    else:  # -135 <= real_angle < -45
-        return 'x-'  # ตะวันตก
 
-def get_target_yaw_for_direction(target_direction):
-    """
-    คำนวณมุม yaw ที่ต้องการสำหรับทิศทางจริง
-    """
-    if not orientation_calibration['is_calibrated']:
-        # ใช้ค่าเริ่มต้นถ้าไม่ได้ calibrate
-        direction_angles = {'y+': 0, 'x+': 90, 'y-': 180, 'x-': -90}
-        return direction_angles.get(target_direction, 0)
-    
-    # แปลงทิศทางเป็นมุมจริง
-    direction_to_real_angle = {
-        'y+': 0,    # เหนือ
-        'x+': 90,   # ตะวันออก
-        'y-': 180,  # ใต้
-        'x-': -90   # ตะวันตก
-    }
-    
-    real_angle = direction_to_real_angle.get(target_direction, 0)
-    
-    # แปลงกลับเป็น yaw
-    target_yaw = real_angle - orientation_calibration['direction_offset']
-    
-    # ปรับให้อยู่ในช่วง -180 ถึง 180
-    while target_yaw > 180:
-        target_yaw -= 360
-    while target_yaw < -180:
-        target_yaw += 360
-    
-    return target_yaw
+
+
 
 def init_movement_system():
     """เริ่มต้นระบบการเคลื่อนที่"""
@@ -429,7 +364,7 @@ def init_movement_system():
     
     # **เพิ่ม: Calibrate ทิศทางเริ่มต้น**
     print("\n🧭 กำลัง calibrate ทิศทางเริ่มต้น...")
-    calibrate_initial_orientation('y+')  # สมมติว่าหุ่นยนต์หันหน้าไปทิศเหนือ (y+)
+    calibrate_initial_orientation('x+')  # เริ่มต้นด้วย x+ (ตะวันออก) ตรงกับ main.py
     
     # สร้างไฟล์ log
     output_dir = "csv_pid"
