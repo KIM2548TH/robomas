@@ -16,7 +16,6 @@ from controler.movement import (
     get_current_orientation, 
     get_movement_stats,
     set_move_distance,
-    detect_walls_at_current_position,
     # **import ระบบ calibration**
     calibrate_initial_orientation,
     get_real_direction_from_yaw,
@@ -24,6 +23,13 @@ from controler.movement import (
     # **ลบ convert_blocked_directions_to_compass**
 )
 from controler.map import Graph, a_star_search, Node, calculate_direction
+from controler.check_wall import (
+    move_gimbal,
+    initialize_sensors,
+    cleanup_sensors,
+    detect_walls_with_gimbal,
+    convert_gimbal_result_to_blocked_directions
+)
 
 class MazeRunner:
     def __init__(self):
@@ -34,7 +40,7 @@ class MazeRunner:
         set_move_distance(self.move_distance)
         
         # **เพิ่ม: ระบบติดตามทิศทาง**
-        self.current_facing_direction = 'y+'  # เริ่มต้นหันหน้าทิศเหนือ
+        self.current_facing_direction = 'x+'  # เริ่มต้นหันหน้าทิศเหนือ
         self.direction_history = []  # บันทึกประวัติการหมุน
         
         print(f"🧭 เริ่มต้นหันหน้าไปทิศ: {self.current_facing_direction} (เหนือ)")
@@ -79,9 +85,8 @@ class MazeRunner:
             'y+': 'เหนือ', 'y-': 'ใต้', 'x+': 'ตะวันออก', 'x-': 'ตะวันตก'
         }
         
-        print(f"🔄 หมุน{turn_direction}: {direction_names[old_direction]} → {direction_names[self.current_facing_direction]}")
-        print(f"🧭 ตอนนี้หันหน้าไปทิศ: {self.current_facing_direction} ({direction_names[self.current_facing_direction]})")
-    
+        print(f"✅ หมุน{turn_direction}: {direction_names[old_direction]} → {direction_names[self.current_facing_direction]}")
+
     def verify_direction_from_movement(self, from_node_id, to_node_id):
         """
         ตรวจสอบทิศทางจากการเคลื่อนที่ระหว่างโหนด
@@ -131,55 +136,42 @@ class MazeRunner:
         """ดึงตำแหน่งจริงจากเซ็นเซอร์"""
         return get_current_position()
         
-    def add_node_here(self, is_exit=False, blocked_directions=None, auto_detect_walls=True):
+    def add_node_here(self, is_exit=False, auto_detect_walls=True):
         """
-        เพิ่มโหนดที่ตำแหน่งปัจจุบัน พร้อมตรวจจับทางตันอัตโนมัติ
-        
-        Args:
-            is_exit (bool): เป็นทางออกหรือไม่
-            blocked_directions (list): รายการทิศทางที่เป็นทางตัน (แกนจริง) เช่น ['x+', 'y-']
-            auto_detect_walls (bool): ตรวจจับทางตันอัตโนมัติหรือไม่
+        เพิ่มโหนดที่ตำแหน่งปัจจุบัน พร้อมตรวจจับทางตันด้วย gimbal
         """
         x, y = self.get_real_position()
-        
         print(f"📍 ตำแหน่งจากเซ็นเซอร์: x={x:.3f}, y={y:.3f}")
         
-        # ตรวจจับทางตันอัตโนมัติด้วย subscription
+        # ตรวจจับทางตันด้วย gimbal
         detected_walls = []
         if auto_detect_walls:
-            print("🔍 เริ่มตรวจจับทางตันด้วย subscription...")
-            detected_walls = detect_walls_at_current_position()
+            print("🔍 เริ่มตรวจจับทางตันด้วย gimbal...")
+            # ใช้ฟังก์ชัน detect_walls_with_gimbal
+            from controler.movement import ep_robot
+            detected_walls = detect_walls_with_gimbal(ep_robot, self.current_facing_direction)
             
         # รวมทางตันที่ตรวจพบกับที่ระบุ manual
         all_blocked = []
-        if detected_walls:
-            # **ไม่ต้องแปลงแล้ว ใช้แกนจริงโดยตรง**
-            all_blocked.extend(detected_walls)  
-            print(f"🤖 ตรวจพบทางตันอัตโนมัติ (แกนจริง): {detected_walls}")
-            
-        if blocked_directions:
-            all_blocked.extend(blocked_directions)
-            print(f"👤 ระบุทางตัน manual (แกนจริง): {blocked_directions}")
-        
-        # ลบรายการซ้ำ
-        final_blocked = list(set(all_blocked))
-        
-        # แสดงข้อมูลทางตันรวม
-        if final_blocked:
-            print(f"🚫 ทางตันรวม (แกนจริง): {final_blocked}")
+        if detected_walls[1]:
+            all_blocked.extend(detected_walls[1])  
+            print(f"🤖 ตรวจพบทางตันด้วย gimbal: {detected_walls[1]}")
+
+        if all_blocked:
+            print(f"🚫 ทางตันรวม: {all_blocked}")
         
         # แสดงสถิติการเคลื่อนที่
         stats = get_movement_stats()
         print(f"🚀 ความเร็ว: {stats['speed']:.3f}m/s")
-        print(f"⚖️ ความเสถียร: {stats['stable_count']} iterations")
         
         display_x = round(x, 1)
         display_y = round(y, 1)
         
         node_id = self.maze_map.add_node(x=x, y=y, is_exit=is_exit, 
-                                       blocked_directions=final_blocked)
+                                       blocked_directions=all_blocked)
         print(f"📍 เพิ่มโหนด {node_id} ที่ ({display_x}, {display_y})")
-        return node_id
+        print(detected_walls)
+        return node_id,detected_walls[0]
 
     def find_existing_node(self):
         """หาโหนดเดิมที่ใกล้ตำแหน่งปัจจุบัน"""
@@ -208,141 +200,107 @@ class MazeRunner:
         
         return best_node
     
-    def move_with_detection(self, turn_direction=None, turn_angle=90, 
-                          blocked_directions=None, auto_detect_walls=True):
-        """
-        เดินแบบตรวจสอบโหนดเดิมเสมอ พร้อมตรวจจับทางตัน
-        
-        Args:
-            turn_direction (str): ทิศทางการเลี้ยว 'right' หรือ 'left'
-            turn_angle (float): มุมการเลี้ยว (องศา)
-            blocked_directions (list): ทิศทางที่เป็นทางตันสำหรับโหนดใหม่ (manual)
-            auto_detect_walls (bool): ตรวจจับทางตันอัตโนมัติหรือไม่
-        """
-        # เลี้ยว (ถ้าต้องการ)
-        if turn_direction == "right":
-            print(f"🔄 เลี้ยวขวา {turn_angle}°")
-            turn_right(turn_angle)
-        elif turn_direction == "left":
-            print(f"🔄 เลี้ยวซ้าย {turn_angle}°")
-            turn_left(turn_angle)
-            
-        time.sleep(0.2)
-        
-        # เดิน
-        print(f"🚶 เดิน {self.move_distance}m")
-        move_forward(self.move_distance)
-        
-        # เช็คโหนดเดิมเสมอ
-        existing_node = self.find_existing_node()
-        
-        if existing_node is not None:
-            # ใช้โหนดเดิม
-            print(f"✅ ใช้โหนดเดิม {existing_node}")
-            node_id = existing_node
-            
-            # เพิ่มทางตันให้โหนดเดิม (ถ้ามี)
-            if auto_detect_walls or blocked_directions:
-                print("🔍 ตรวจจับทางตันเพิ่มเติมสำหรับโหนดเดิม...")
-                if auto_detect_walls:
-                    detected_walls = detect_walls_at_current_position()
-                    # **ใช้แกนจริงโดยตรง ไม่ต้องแปลง**
-                    for direction in detected_walls:
-                        self.maze_map.add_blocked_direction_to_node(node_id, direction)
-                
-                if blocked_directions:
-                    for direction in blocked_directions:
-                        self.maze_map.add_blocked_direction_to_node(node_id, direction)
-        else:
-            # สร้างโหนดใหม่
-            print(f"➕ สร้างโหนดใหม่")
-            node_id = self.add_node_here(blocked_directions=blocked_directions,
-                                       auto_detect_walls=auto_detect_walls)
-        
-        # เชื่อมกับโหนดก่อนหน้า
-        if self.path_history:
-            prev_node = self.path_history[-1]
-            if prev_node != node_id:  # ไม่เชื่อมกับตัวเอง
-                if prev_node not in self.maze_map.nodes[node_id].connections:
-                    self.maze_map.add_edge(prev_node, node_id, self.move_distance)
-                    print(f"🔗 เชื่อม {prev_node} -> {node_id}")
-                else:
-                    print(f"✓ เชื่อมแล้ว {prev_node} -> {node_id}")
-        
-        self.path_history.append(node_id)
-        self.current_node_id = node_id
-        
-        return node_id
+
     
     def explore_maze(self):
-        """สำรวจเขาวงกต พร้อม calibration"""
+        """สำรวจเขาวงกตแบบอัตโนมัติ - เช็คทางก่อนแล้วไปต่อ"""
         print("🏁 เริ่มสำรวจเขาวงกต!")
         
-        # **เพิ่ม: Manual calibration หากต้องการ**
-        print("\n🧭 ตั้งค่าทิศทางเริ่มต้น...")
-        print("   ต้องการ manual calibration หรือไม่? (y/n)")
-        # สำหรับการทดสอบ ให้ใช้ manual calibration
-        # self.manual_calibrate_orientation()
-    
-        # จุดเริ่มต้น
-        start_node = self.add_node_here(auto_detect_walls=False)
+        # จุดเริ่มต้น - สแกนกำแพงเลย
+        start_node,wall = self.add_node_here(auto_detect_walls=True)
         self.path_history.append(start_node)
         self.current_node_id = start_node
+        max_steps = 20
+        # visited_nodes = {start_node}
+        print(wall,656565656565)
         
-        # 1. เดิน 3 ครั้ง
-        print("\n1️⃣ เดิน 3 ครั้ง")
-        for i in range(3):
-            print(f"\n--- ครั้งที่ {i+1} ---")
-            self.move_with_detection(auto_detect_walls=False)
-            time.sleep(0.3)
-        
-        # 2. เลี้ยวขวา + เดิน
-        print("\n2️⃣ เลี้ยวขวา + เดิน")
-        self.move_with_detection("right", 90, auto_detect_walls=False)
-        time.sleep(0.3)
-        
-        # 3. เลี้ยวขวา + เดิน
-        print("\n3️⃣ เลี้ยวขวา + เดิน")
-        self.move_with_detection("right", 90, auto_detect_walls=False)
-        time.sleep(0.3)
-        
-        # 4. เลี้ยวขวา + เดิน (ควรเจอโหนดเดิม)
-        print("\n4️⃣ เลี้ยวขวา + เดิน")
-        self.move_with_detection("right", 90, auto_detect_walls=False)
-        time.sleep(0.3)
-        
-        # 5. เดิน 2 ครั้ง
-        print("\n5️⃣ เดิน 2 ครั้ง")
-        for i in range(2):
-            print(f"\n--- ครั้งที่ {i+1} ---")
-            self.move_with_detection(auto_detect_walls=False)
-            time.sleep(0.3)
-        
-        # เลี้ยวซ้าย 2 ครั้ง + เดิน
-        print("\n6️⃣ เลี้ยวซ้าย + เดิน")
-        self.move_with_detection("left", 90, auto_detect_walls=False)
-        time.sleep(0.3)
-        
-        print("\n7️⃣ เลี้ยวซ้าย + เดิน")
-        self.move_with_detection("left", 90, auto_detect_walls=False)
-        time.sleep(0.3)
+        for step in range(1, max_steps + 1):
+            print(f"\n--- ขั้นตอนที่ {step} ---")
+            
+            # ✅ 1. เช็คโหนดปัจจุบันว่ามีทางไหนไปได้บ้าง (ที่เราเช็คด้วยกิมบอลแล้ว)
+            current_node = self.maze_map.nodes[self.current_node_id]
+            print(9999)
+            # wall = list(current_node.blocked_directions)
+            
+            print(f"📍 ตรวจสอบโหนดปัจจุบัน {self.current_node_id}:")
+            print(f"   - ทางตัน (เช็คด้วยกิมบอลแล้ว): {wall}")
+            
 
-        self.move_with_detection(auto_detect_walls=False)
-        time.sleep(0.3)
+            # ✅ 3. เลือกทิศทางแรกที่ยังไม่เคยไป (จากที่เช็คแล้ว)
+            chosen_direction = ''
+            if wall :
+                if wall[0] == 1:
+                    chosen_direction = 'right'  # เลือกซ้าย
+                elif wall[1] == 1:
+                    chosen_direction = 'front'  # เลือกหน้า
+                elif wall[2] == 1:
+                    chosen_direction = 'left'  # เลือกขวา
+                elif wall[0] + wall[1] + wall[2] == 0:
+                    chosen_direction = "back"
+                print(f"🎯 เลือกไปทิศทาง: {chosen_direction} (เช็คด้วยกิมบอลแล้ว)")
+            
+ 
+            print(f"🎯 ต้องหันไป: {chosen_direction}")
+
+
+            if chosen_direction == 'left':
+                print("➡️ หันหน้าไปทิศซ้าย")
+                turn_left(90)
+                time.sleep(0.1)
+                move_forward(0.6)
+            elif chosen_direction == 'right':
+                print("➡️ หันหน้าไปทิศขวา")
+                turn_right(90)
+                time.sleep(0.1)
+                move_forward(0.6)
+            elif chosen_direction == 'front':
+                print("➡️ หันหน้าไปทิศหน้า")
+                move_forward(0.6)
+            elif chosen_direction == 'back':
+                print("➡️ หันหน้าไปทิศหลัง")
+                turn_left(180)
+                time.sleep(0.1)
+                move_forward(0.6)
+
+            # ✅ 5. เดินไปทิศทางที่เลือก
+            print(f"🚶 เดินไปทิศทาง {chosen_direction}")
+
+            new_node_id,wall = self.add_node_here(auto_detect_walls=True)
+            new_node = self.maze_map.nodes[self.current_node_id]
+
+            self.maze_map.add_edge(self.current_node_id, new_node_id, 0.6)
+            self.current_node_id = new_node_id
+
+
+            self.path_history.append(new_node)
+            print(self.path_history,8888)
+            print(888)
+            
+            # self.current_node_id
+            # visited_nodes.add(new_node)
+            
+            print(f"📊 สถิติ: โหนด {len(self.maze_map.nodes)}, ")
+            time.sleep(0.5)
         
-        # print("\n8️⃣ เดินสุดท้าย")
-        # self.move_with_detection(auto_detect_walls=True)
-        # time.sleep(0.3)
+        # หาโหนดที่ไกลที่สุดเป็นทางออก
+        start_node_obj = self.maze_map.nodes[start_node]
+        max_distance = 0
+        end_node = start_node
         
-        # กำหนดทางออก
-        end_node = self.current_node_id
+        for node_id, node in self.maze_map.nodes.items():
+            if node_id != start_node:
+                distance = math.sqrt((node.x - start_node_obj.x)**2 + (node.y - start_node_obj.y)**2)
+                if distance > max_distance:
+                    max_distance = distance
+                    end_node = node_id
+
         self.maze_map.nodes[end_node].is_exit = True
-        print(f"🎯 โหนด {end_node} = ทางออก")
+        print(f"🎯 กำหนดโหนด {end_node} เป็นทางออก")
         
-        # แสดงแผนที่
         self.show_map()
-        
         return start_node, end_node
+
+# ...existing code...
     
     def show_map(self):
         """แสดงแผนที่พร้อมข้อมูลทางตันแบบละเอียด"""
@@ -526,29 +484,29 @@ def main():
     
     runner = MazeRunner()
     
-    try:
-        print("⏳ รอ 2 วินาที...")
-        time.sleep(2)
+    # try:
+    print("⏳ รอ 2 วินาที...")
+    time.sleep(0.5)
+    
+    # สำรวจ
+    start, end = runner.explore_maze()
+    
+    print("\n⏱️ พัก 2 วินาที...")
+    time.sleep(0.5)
+    
+    # กลับ
+    path, distance = runner.return_home(start, end)
+    
+    print(f"\n🎉 สำเร็จ!")
+    print(f"📏 ระยะทางกลับ: {distance:.1f}m")
+    print(f"🗺️ โหนดทั้งหมด: {len(runner.maze_map.nodes)}")
         
-        # สำรวจ
-        start, end = runner.explore_maze()
-        
-        print("\n⏱️ พัก 2 วินาที...")
-        time.sleep(2)
-        
-        # กลับ
-        path, distance = runner.return_home(start, end)
-        
-        print(f"\n🎉 สำเร็จ!")
-        print(f"📏 ระยะทางกลับ: {distance:.1f}m")
-        print(f"🗺️ โหนดทั้งหมด: {len(runner.maze_map.nodes)}")
-        
-    except KeyboardInterrupt:
-        print("\n⏹️ หยุด")
-    except Exception as e:
-        print(f"\n❌ ผิดพลาด: {e}")
-    finally:
-        cleanup_movement_system()
+    # except KeyboardInterrupt:
+    #     print("\n⏹️ หยุด")
+    # except Exception as e:
+    #     print(f"\n❌ ผิดพลาด: {e}")
+    # finally:
+    cleanup_movement_system()
 
 if __name__ == '__main__':
     main()
