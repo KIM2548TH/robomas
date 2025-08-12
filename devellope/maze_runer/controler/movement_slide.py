@@ -14,18 +14,14 @@ turn_pid = None  # **เพิ่ม: PID สำหรับการหมุ�
 def sub_chassis_position(position_info):
     """Callback สำหรับตำแหน่ง chassis"""
     global latest_chassis_position
-    if isinstance(position_info, (tuple, list)):
-        latest_chassis_position = list(position_info)
-    else:
-        latest_chassis_position = [position_info[0], position_info[1], position_info[2]]
+    # **แก้ไข: แปลงเป็น list เสมอ**
+    latest_chassis_position = list(position_info)
 
 def sub_chassis_attitude(attitude_info):
     """Callback สำหรับท่าทาง chassis (yaw, pitch, roll)"""
     global latest_chassis_attitude
-    if isinstance(attitude_info, (tuple, list)):
-        latest_chassis_attitude = list(attitude_info)
-    else:
-        latest_chassis_attitude = [attitude_info[0], attitude_info[1], attitude_info[2]]
+    # **แก้ไข: แปลงเป็น list เสมอ**
+    latest_chassis_attitude = list(attitude_info)
 
 def correct_robot_orientation(ep_chassis, target_yaw=0):
     """
@@ -97,7 +93,6 @@ def correct_robot_orientation(ep_chassis, target_yaw=0):
     ep_chassis.drive_speed(x=0, y=0, z=0)
     time.sleep(0.1)
 
-# ตัวอย่างการใช้งานฟังก์ชันใหม่
 def move_direction_pid(ep_chassis, direction, distance):
     """
     เคลื่อนที่ไปยังทิศทางที่กำหนดด้วย PID control (ไม่หมุนตัว - สไลด์)
@@ -111,10 +106,6 @@ def move_direction_pid(ep_chassis, direction, distance):
         float: ระยะทางที่เคลื่อนที่ได้จริง
     """
     global move_pid_x, move_pid_y, latest_chassis_position
-    
-    # **ตรวจสอบและแปลง latest_chassis_position เป็น list**
-    if not isinstance(latest_chassis_position, list):
-        latest_chassis_position = list(latest_chassis_position)
     
     # แมปทิศทางกับการเคลื่อนที่
     direction_map = {
@@ -141,7 +132,7 @@ def move_direction_pid(ep_chassis, direction, distance):
     move_pid_x.reset()
     move_pid_y.reset()
     
-    # **ใช้ list() แทน .copy()**
+    # **แก้ไข: ใช้ list() แทน .copy()**
     start_pos = list(latest_chassis_position)
     
     # คำนวณตำแหน่งเป้าหมาย
@@ -158,10 +149,6 @@ def move_direction_pid(ep_chassis, direction, distance):
     
     while iteration < max_iterations:
         iteration += 1
-        
-        # **ตรวจสอบ latest_chassis_position อีกครั้ง**
-        if not isinstance(latest_chassis_position, list):
-            latest_chassis_position = list(latest_chassis_position)
         
         # คำนวณระยะทางปัจจุบัน
         dx = latest_chassis_position[0] - start_pos[0]
@@ -216,7 +203,7 @@ def move_direction_pid(ep_chassis, direction, distance):
 
 def move_direction_pid_wall(ep_chassis, direction, distance):
     """
-    เคลื่อนที่ไปยังทิศทางที่กำหนดด้วย PID control (ไม่หมุนตัว - สไลด์)
+    เคลื่อนที่ไปยังทิศทางที่กำหนดด้วย PID control สำหรับปรับตำแหน่งกับกำแพง
     
     Args:
         ep_chassis: chassis controller
@@ -227,10 +214,6 @@ def move_direction_pid_wall(ep_chassis, direction, distance):
         float: ระยะทางที่เคลื่อนที่ได้จริง
     """
     global move_pid_x, move_pid_y, latest_chassis_position
-    
-    # **ตรวจสอบและแปลง latest_chassis_position เป็น list**
-    if not isinstance(latest_chassis_position, list):
-        latest_chassis_position = list(latest_chassis_position)
     
     # แมปทิศทางกับการเคลื่อนที่
     direction_map = {
@@ -245,7 +228,7 @@ def move_direction_pid_wall(ep_chassis, direction, distance):
         return 0
     
     dir_info = direction_map[direction]
-    print(f"🚶 สไลด์{dir_info['name']} {distance:.3f}m")
+    print(f"🔧 ปรับตำแหน่ง{dir_info['name']} {distance:.3f}m")
     
     # เริ่มต้น PID controllers
     if move_pid_x is None:
@@ -257,48 +240,31 @@ def move_direction_pid_wall(ep_chassis, direction, distance):
     move_pid_x.reset()
     move_pid_y.reset()
     
-    # **ใช้ list() แทน .copy()**
+    # **แก้ไข: ใช้ list() แทน .copy()**
     start_pos = list(latest_chassis_position)
     
     # คำนวณตำแหน่งเป้าหมาย
     target_x = start_pos[0] + (distance * dir_info['x'])
     target_y = start_pos[1] + (distance * dir_info['y'])
     
-    tolerance = 0.05  # 1cm
+    tolerance = 0.05  # 5cm สำหรับการปรับตำแหน่ง
     stable_iterations = 0
-    max_iterations = 200
+    max_iterations = 120  # ลดลงเพื่อไม่ให้ใช้เวลานาน
     iteration = 0
-    
-    print(f"📍 เริ่มต้นที่: ({start_pos[0]:.3f}, {start_pos[1]:.3f})")
-    print(f"🎯 เป้าหมาย: ({target_x:.3f}, {target_y:.3f})")
     
     while iteration < max_iterations:
         iteration += 1
-        
-        # **ตรวจสอบ latest_chassis_position อีกครั้ง**
-        if not isinstance(latest_chassis_position, list):
-            latest_chassis_position = list(latest_chassis_position)
-        
-        # คำนวณระยะทางปัจจุบัน
-        dx = latest_chassis_position[0] - start_pos[0]
-        dy = latest_chassis_position[1] - start_pos[1]
-        current_distance = math.sqrt(dx*dx + dy*dy)
         
         # คำนวณ error ในแต่ละแกน
         error_x = target_x - latest_chassis_position[0]
         error_y = target_y - latest_chassis_position[1]
         total_error = math.sqrt(error_x*error_x + error_y*error_y)
         
-        # แสดงความคืบหน้าทุกๆ 0.5 วินาที
-        if iteration % 25 == 0:
-            progress = min(100, (current_distance / distance) * 100) if distance > 0 else 100
-            print(f"   📊 {current_distance:.3f}m/{distance:.3f}m ({progress:.1f}%) error:{total_error:.3f}m")
-        
         # ตรวจสอบว่าถึงเป้าหมายแล้วหรือไม่
         if total_error < tolerance:
             stable_iterations += 1
-            if stable_iterations >= 30:
-                print("✅ ถึงเป้าหมายแล้ว!")
+            if stable_iterations >= 10:
+                print("✅ ปรับตำแหน่งเสร็จ!")
                 break
         else:
             stable_iterations = 0
@@ -307,7 +273,7 @@ def move_direction_pid_wall(ep_chassis, direction, distance):
         pid_output_x, _, _, _, _, _ = move_pid_x.compute(target_x, latest_chassis_position[0])
         pid_output_y, _, _, _, _, _ = move_pid_y.compute(target_y, latest_chassis_position[1])
         
-        # จำกัดความเร็วสูงสุด
+        # จำกัดความเร็วสูงสุด (ช้ากว่าสำหรับการปรับตำแหน่ง)
         max_speed = 0.8  # m/s
         speed_x = max(-max_speed, min(max_speed, pid_output_x))
         speed_y = max(-max_speed, min(max_speed, pid_output_y))
@@ -324,12 +290,10 @@ def move_direction_pid_wall(ep_chassis, direction, distance):
     final_dy = latest_chassis_position[1] - start_pos[1]
     final_distance = math.sqrt(final_dx*final_dx + final_dy*final_dy)
     
-    print(f"✅ สไลด์เสร็จ {final_distance:.3f}m")
-    print(f"📍 ตำแหน่งสุดท้าย: ({latest_chassis_position[0]:.3f}, {latest_chassis_position[1]:.3f})")
+    print(f"✅ ปรับตำแหน่งเสร็จ {final_distance:.3f}m")
     
     time.sleep(0.05)
     return final_distance
-
 
 def move_forward_pid(ep_chassis, distance):
     """เดินไปข้างหน้า (x+) ด้วย PID"""

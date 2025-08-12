@@ -9,41 +9,16 @@ class Node:
         self.y = y
         self.is_exit = is_exit
         self.connections = {}  # {neighbor_id: distance}
-        
-        # **เพิ่ม: ระบบระบุทางตัน**
-        self.blocked_directions = set()  # เก็บทิศทางที่เป็นทางตัน
-        # ทิศทาง: 'north', 'south', 'east', 'west'
+        self.blocked_directions = []  # เก็บข้อมูลสแกน [y-, x+, y+, x-]
+        self.marker = []
     
     def add_blocked_direction(self, direction):
-        """เพิ่มทิศทางที่เป็นทางตัน"""
-        valid_directions = {'x+', 'x-', 'y+', 'y-'}  # **แก้ไข: ใช้แกนจริง**
-        if direction in valid_directions:
-            self.blocked_directions.add(direction)
-            direction_names = {
-                'x+': 'ทิศตะวันออก (X+)',
-                'x-': 'ทิศตะวันตก (X-)', 
-                'y+': 'ทิศเหนือ (Y+)',
-                'y-': 'ทิศใต้ (Y-)'
-            }
-            print(f"🚫 โหนด {self.id}: เพิ่มทางตัน {direction} ({direction_names[direction]})")
-    
-    def remove_blocked_direction(self, direction):
-        """ลบทิศทางทางตัน"""
-        if direction in self.blocked_directions:
-            self.blocked_directions.remove(direction)
-            print(f"✅ โหนด {self.id}: ลบทางตัน {direction}")
-    
-    def is_blocked_direction(self, direction):
-        """ตรวจสอบว่าทิศทางนั้นเป็นทางตันหรือไม่"""
-        return direction in self.blocked_directions
-    
-    def get_available_directions(self):
-        """ดึงทิศทางที่สามารถไปได้"""
-        all_directions = {'x+', 'x-', 'y+', 'y-'}  # **แก้ไข: ใช้แกนจริง**
-        return all_directions - self.blocked_directions
+        """บันทึกข้อมูลสแกนตรงๆ [0,0,0,0]"""
+        if direction:
+            self.blocked_directions = direction  # บันทึกตรงๆ
     
     def __repr__(self):
-        blocked_str = f", blocked={list(self.blocked_directions)}" if self.blocked_directions else ""
+        blocked_str = f", scan_data={self.blocked_directions}" if self.blocked_directions else ""
         return f"Node(id={self.id}, pos=({self.x},{self.y}), exit={self.is_exit}{blocked_str})"
 
 class Graph:
@@ -51,54 +26,52 @@ class Graph:
         self.nodes = {}
         self.node_count = 0
 
-    def add_node(self, x, y, is_exit=False, blocked_directions=None):
-        """เพิ่มโหนดพร้อมระบุทางตัน"""
+    def add_node(self, x, y, is_exit=False):
+        """เพิ่มโหนด"""
         new_id = self.node_count
         new_node = Node(new_id, x, y, is_exit)
-        
-        # เพิ่มทางตันถ้ามี
-        if blocked_directions:
-            for direction in blocked_directions:
-                new_node.add_blocked_direction(direction)
-        
         self.nodes[new_id] = new_node
         self.node_count += 1
-        print(f"📍 พบโหนดใหม่: {new_node}")
+        print(f"📍 สร้างโหนดใหม่: Node(id={new_id}, pos=({x:.2f},{y:.2f}))")
         return new_id
     
     def add_blocked_direction_to_node(self, node_id, direction):
-        """เพิ่มทางตันให้โหนดที่มีอยู่แล้ว"""
+        """บันทึกข้อมูลสแกนลงโหนด"""
         if node_id in self.nodes:
             self.nodes[node_id].add_blocked_direction(direction)
+            print(f"🗺️  บันทึกข้อมูลสแกน: โหนด {node_id} = {direction}")
         else:
             print(f"❌ ไม่พบโหนด {node_id}")
 
     def add_edge(self, node1_id, node2_id, distance):
         """เชื่อมโหนดสองโหนด"""
         if node1_id in self.nodes and node2_id in self.nodes:
-            self.nodes[node1_id].connections[node2_id] = distance
-            self.nodes[node2_id].connections[node1_id] = distance
-            print(f"🔗 สร้างเส้นทางระหว่างโหนด {node1_id} <-> {node2_id} (ระยะทาง: {distance})")
+            # ตรวจสอบว่าเชื่อมแล้วหรือยัง
+            if node2_id not in self.nodes[node1_id].connections:
+                self.nodes[node1_id].connections[node2_id] = distance
+                self.nodes[node2_id].connections[node1_id] = distance
+                print(f"🔗 เชื่อมเส้นทาง: โหนด {node1_id} <-> {node2_id} (ระยะทาง: {distance:.3f})")
+            else:
+                print(f"🔍 เส้นทางมีอยู่แล้ว: โหนด {node1_id} <-> {node2_id}")
         else:
             print(f"❌ ไม่สามารถเชื่อมโหนด {node1_id} และ {node2_id} ได้")
 
 def calculate_direction(from_node, to_node):
-    """คำนวณทิศทางจากโหนดหนึ่งไปอีกโหนดหนึ่ง - ใช้แกนจริง"""
+    """คำนวณทิศทางจากโหนดหนึ่งไปอีกโหนดหนึ่ง"""
     dx = to_node.x - from_node.x
     dy = to_node.y - from_node.y
     
-    # ตรวจสอบทิศทางตามแกนจริง
     if abs(dx) > abs(dy):
-        return 'x+' if dx > 0 else 'x-'  # **แก้ไข: ใช้แกนจริง**
+        return 'x+' if dx > 0 else 'x-'
     else:
-        return 'y+' if dy > 0 else 'y-'  # **แก้ไข: ใช้แกนจริง**
+        return 'y+' if dy > 0 else 'y-'
 
 def heuristic(node1, node2):
     """คำนวณระยะทางแบบยุคลิด"""
     return math.sqrt((node1.x - node2.x)**2 + (node1.y - node2.y)**2)
 
 def a_star_search(graph, start_id, goal_id):
-    """A* search algorithm พร้อมพิจารณาทางตัน"""
+    """A* search algorithm"""
     if start_id not in graph.nodes or goal_id not in graph.nodes:
         print(f"❌ โหนดเริ่มต้น ({start_id}) หรือโหนดเป้าหมาย ({goal_id}) ไม่พบ")
         return None, 0
@@ -130,28 +103,17 @@ def a_star_search(graph, start_id, goal_id):
             return path, total_distance
         
         current_node = graph.nodes[current_id]
-        print(f"🔍 ตรวจสอบโหนด {current_id} (blocked: {list(current_node.blocked_directions)})")
         
         for neighbor_id, edge_distance in current_node.connections.items():
-            neighbor_node = graph.nodes[neighbor_id]
-            
-            # **แก้ไข: ตรวจสอบทิศทางจากการเชื่อมต่อ ไม่ใช่จากพิกัด**
-            print(f"   -> เช็คเพื่อนบ้าน {neighbor_id}")
-            print(f"      มีการเชื่อมต่อแล้ว = สามารถไปได้")
-            
-            # ถ้ามีการเชื่อมต่อแปลว่าไปได้ (ไม่ต้องเช็ค blocked_directions)
-            # เพราะการเชื่อมต่อเกิดขึ้นตอนที่ยังไม่มีกำแพงขวาง
-            
             tentative_g_score = g_score[current_id] + edge_distance
             
             if neighbor_id not in g_score or tentative_g_score < g_score[neighbor_id]:
                 came_from[neighbor_id] = current_id
                 g_score[neighbor_id] = tentative_g_score
-                f_score[neighbor_id] = tentative_g_score + heuristic(neighbor_node, goal_node)
+                f_score[neighbor_id] = tentative_g_score + heuristic(graph.nodes[neighbor_id], goal_node)
                 
                 if (f_score[neighbor_id], neighbor_id) not in open_set:
                     heapq.heappush(open_set, (f_score[neighbor_id], neighbor_id))
-                    print(f"      ✅ เพิ่ม {neighbor_id} ลงใน open_set")
     
     print(f"❌ ไม่พบเส้นทางจาก {start_id} ไป {goal_id}")
     return None, 0
