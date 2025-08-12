@@ -33,14 +33,14 @@ def move_gimbal(ep_gimbal,ep_chassis):
     way = [0,0,0]
 
     # หันซ้าย
-    ep_gimbal.moveto(pitch=-10, yaw=-90, pitch_speed=100, yaw_speed=100).wait_for_completed()
+    ep_gimbal.moveto(pitch=-10, yaw=-90, pitch_speed=200, yaw_speed=200).wait_for_completed()
     print("หันซ้าย",lastest_distance[0])
     if lastest_distance[0] < 200 :
         way[0] = 0 #ทางตัน
-        ep_chassis.move(x=0, y=(200-lastest_distance[0])/1000, z=0, xy_speed=0.7).wait_for_completed()
+        ep_chassis.move(x=0, y=(200-lastest_distance[0])/1000, z=0, xy_speed=1.5).wait_for_completed()
     elif lastest_distance[0] < 400:
         way[0] = 0 #ทางตัน
-        ep_chassis.move(x=0, y=((lastest_distance[0])-200)/1000, z=0, xy_speed=0.7).wait_for_completed()
+        ep_chassis.move(x=0, y=((lastest_distance[0])-200)/1000, z=0, xy_speed=1.5).wait_for_completed()
     else:
         way[0] = 1 #ทางไกล
 
@@ -49,27 +49,27 @@ def move_gimbal(ep_gimbal,ep_chassis):
     print("หันกลาง",lastest_distance[0])
     if lastest_distance[0] < 200 :
         way[1] = 0 #ทางตัน
-        ep_chassis.move(x=-(abs(200-lastest_distance[0])/1000), y=0, z=0, xy_speed=0.7).wait_for_completed()
+        ep_chassis.move(x=-(abs(200-lastest_distance[0])/1000), y=0, z=0, xy_speed=1.5).wait_for_completed()
     elif lastest_distance[0] < 400:    
         way[1] = 0 #ทางตัน
-        ep_chassis.move(x=(abs(200-lastest_distance[0])/1000), y=0, z=0, xy_speed=0.7).wait_for_completed()
+        ep_chassis.move(x=(abs(200-lastest_distance[0])/1000), y=0, z=0, xy_speed=1.5).wait_for_completed()
     else:
         way[1] = 1 #ทางไกล
 
     # หันขวา
-    ep_gimbal.moveto(pitch=-10, yaw=90, pitch_speed=100, yaw_speed=100).wait_for_completed()
+    ep_gimbal.moveto(pitch=-10, yaw=90, pitch_speed=200, yaw_speed=200).wait_for_completed()
     print("หันขวา",lastest_distance[0])
     if lastest_distance[0] < 200 :
         way[2] = 0 #ทางตัน
-        ep_chassis.move(x=0, y=-(abs(200-lastest_distance[0])/1000), z=0, xy_speed=0.7).wait_for_completed()
+        ep_chassis.move(x=0, y=-(abs(200-lastest_distance[0])/1000), z=0, xy_speed=1.5).wait_for_completed()
     elif lastest_distance[0] < 400:    
         way[2] = 0 #ทางตัน
-        ep_chassis.move(x=0, y=(abs(200-lastest_distance[0])/1000), z=0, xy_speed=0.7).wait_for_completed()   
+        ep_chassis.move(x=0, y=(abs(200-lastest_distance[0])/1000), z=0, xy_speed=1.5).wait_for_completed()   
     else:
         way[2] = 1 #ทางไกล
 
     # หันกลับด้านหน้า
-    ep_gimbal.moveto(pitch=-10, yaw=0, pitch_speed=100, yaw_speed=100).wait_for_completed()
+    ep_gimbal.moveto(pitch=-10, yaw=0, pitch_speed=200, yaw_speed=200).wait_for_completed()
     return way
 
 
