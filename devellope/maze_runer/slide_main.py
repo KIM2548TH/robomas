@@ -322,6 +322,8 @@ def explore_from(current_coords, ep_chassis, ep_gimbal, ep_vision,ep_camera):
 
         available_ways,marker, tof_wall = move_gimbal(ep_gimbal, ep_chassis, ep_vision,ep_camera)
         move_to_tile_center_from_walls(ep_chassis, available_ways, marker, tof_wall, tile_size=0.4)
+        correct_robot_orientation(ep_chassis, target_yaw=0)
+
         scan_memory[current_coords] = available_ways
         print(f"🔬 ผลการสแกนถูกบันทึก: {available_ways}")
         
@@ -391,6 +393,7 @@ def explore_from(current_coords, ep_chassis, ep_gimbal, ep_vision,ep_camera):
                 move_direction_pid(ep_chassis, reverse_direction, STEP_SIZE)
                 available_ways2, marker, tof_wall = move_gimbal(ep_gimbal, ep_chassis, ep_vision, ep_camera)
                 move_to_tile_center_from_walls(ep_chassis, available_ways, marker, tof_wall, tile_size=0.4)
+                correct_robot_orientation(ep_chassis, target_yaw=0)
                 
                 # **หันกิมบอลกลับด้านหน้าหลังเดินกลับเสร็จ**
                 print(f"     🏠 หันกิมบอลกลับด้านหน้า (0°)")
