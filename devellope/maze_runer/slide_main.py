@@ -34,7 +34,7 @@ from controler.movement_slide import (
 )
 
 # --- ค่าคงที่และตัวแปร Global ---
-STEP_SIZE = 0.6  # ระยะทางในการเดินแต่ละครั้ง (เมตร)
+STEP_SIZE = 0.7  # ระยะทางในการเดินแต่ละครั้ง (เมตร)
 
 # Global variables to store the latest sensor data from subscriptions
 lastest_distance = [0] 
@@ -140,7 +140,7 @@ def get_stable_distance_reading():
     stable_readings = []
 
     # อ่านค่า 11 ครั้ง
-    for i in range(11):
+    for i in range(5):
         stable_readings.append(lastest_distance[0])
         time.sleep(0.02)  # รอ 20ms
     
@@ -186,6 +186,17 @@ def checkmarkers(i,marker,ep_vision,x,qua, adjust_distance,ep_chassis):
         move_direction_pid_wall(ep_chassis, qua, (stable_distance-200)/1000)
     
     ep_vision.unsub_detect_info(name="marker")
+
+def checkmarkers(i,marker,ep_vision,x):
+    global markers
+    markers.clear()
+    ep_gimbal.moveto(pitch=-30, yaw=x, pitch_speed=300, yaw_speed=300).wait_for_completed()
+    ep_vision.sub_detect_info(name="marker", callback=on_detect_marker)
+    time.sleep(0.5)  # *เพิ่มเวลาให้เซ็นเซอร์ stable*
+    if markers:
+        print(f"📍 พบ Marker ที่ทิศทางซ้าย: {markers[0].text}")
+        marker[i] = markers[0].text  # *บันทึกข้อมูล Marker*
+        ep_vision.unsub_detect_info(name="marker")
 
 def detect_red_color(ep_camera):
     time.sleep(0.5)
@@ -236,51 +247,142 @@ def detect_red_color(ep_camera):
 
 
 # --- ฟังก์ชันสแกนที่ปรับปรุงด้วย Median Filter ---
-def move_gimbal(ep_gimbal, ep_chassis, ep_vision, ep_camera):
+def move_gimbal(ep_gimbal, ep_chassis,ep_vision,ep_camera):
     """
     ฟังก์ชันสแกน 4 ทิศทาง + Median Filter + ปรับทิศทางให้ตรง
-    คืนค่า way, marker, tof_wall
     """
-    way = [0, 0, 0, 0]         # [ซ้าย, หน้า, ขวา, หลัง]
-    marker = ["No"] * 4        # [ซ้าย, หน้า, ขวา, หลัง]
-    tof_wall = [None] * 4      # [ซ้าย, หน้า, ขวา, หลัง]
+    way = [0, 0, 0, 0] # [ซ้าย, หน้า, ขวา, หลัง]
+    marker = ["No", "No", "No", "No"] # [ซ้าย, หน้า, ขวา, หลัง]
 
     print("🧭 ตรวจสอบและปรับทิศทางก่อนสแกน...")
     correct_robot_orientation(ep_chassis, target_yaw=0)
-    time.sleep(0.05)
+    time.sleep(0.1)
 
-    # ทิศทางและข้อมูลสำหรับวนลูป
-    scan_info = [
-        {'yaw': -90, 'dir': 'y+', 'idx': 0, 'marker_yaw': -90},
-        {'yaw': 0,   'dir': 'x+', 'idx': 1, 'marker_yaw': 0},
-        {'yaw': 90,  'dir': 'y-', 'idx': 2, 'marker_yaw': 90},
-        {'yaw': 180, 'dir': 'x-', 'idx': 3, 'marker_yaw': 180},
-    ]
-    for info in scan_info:
-        ep_gimbal.moveto(pitch=-6, yaw=info['yaw'], pitch_speed=350, yaw_speed=350).wait_for_completed()
-        time.sleep(0.05)
-        stable_distance = get_stable_distance_reading()
-        print(f"หัน {info['yaw']}°: stable={stable_distance:.0f}mm")
-        idx = info['idx']
-        # กำหนดเงื่อนไขกำแพง
-        if stable_distance < 600:
-            way[idx] = 0
-            tof_wall[idx] = stable_distance / 1000  # mm -> m
-            # checkmarkers(0,marker,ep_vision,-90, 'y+', adjust_distance,ep_chassis)
-            # ... (ใส่โค้ด marker detection ตามที่คุณมี) ...
-        else:
-            way[idx] = 1
-            tof_wall[idx] = None
+    # หันซ้าย
+    ep_gimbal.moveto(pitch=0, yaw=-90, pitch_speed=350, yaw_speed=350).wait_for_completed()
+    time.sleep(0.1)  # *เพิ่มเวลาให้เซ็นเซอร์ stable*
+    
+    # *ใช้การอ่านค่าแบบ stable*
+    stable_distance = get_stable_distance_reading()
+    print(f"หันซ้าย: raw={lastest_distance[0]:.0f}mm, stable={stable_distance:.0f}mm")
+    
+    if stable_distance < 200:
+        way[0] = 0 #ทางตัน
+        adjust_distance = (170-stable_distance)/1000
+        if adjust_distance > 0:  # *ป้องกันค่าติดลบ*
+            move_direction_pid_wall(ep_chassis, 'y+', adjust_distance)
+            if detect_red_color(ep_camera) :  # *ตรวจจับสีแดง*
+                checkmarkers(0,marker,ep_vision,-90)
+            correct_robot_orientation(ep_chassis, target_yaw=0)
+    elif stable_distance < 600:
+        way[0] = 0 #ทางตัน
+        adjust_distance = (stable_distance-170)/1000
+        if adjust_distance > 0:  # *ป้องกันค่าติดลบ*
+            move_direction_pid_wall(ep_chassis, 'y-', adjust_distance)
+            if detect_red_color(ep_camera) :  # *ตรวจจับสีแดง*
+                checkmarkers(0,marker,ep_vision,-90)
+            correct_robot_orientation(ep_chassis, target_yaw=0)
+    else:
+        way[0] = 1 #ทางไกล
+    
 
-    # หันกลับด้านหน้า
-    ep_gimbal.moveto(pitch=-6, yaw=0, pitch_speed=500, yaw_speed=500).wait_for_completed()
-    time.sleep(0.05)
+    
+
+    # หันหน้า
+    ep_gimbal.moveto(pitch=0, yaw=0, pitch_speed=350, yaw_speed=350).wait_for_completed()
+    time.sleep(0.1)
+    
+    stable_distance = get_stable_distance_reading()
+    print(f"หันกลาง: raw={lastest_distance[0]:.0f}mm, stable={stable_distance:.0f}mm")
+    
+    if stable_distance < 200:
+        way[1] = 0 #ทางตัน
+        adjust_distance = (170-stable_distance)/1000
+        if adjust_distance > 0:
+            move_direction_pid_wall(ep_chassis, 'x-', adjust_distance)
+            if detect_red_color(ep_camera) :
+                checkmarkers(1,marker,ep_vision,0)
+            correct_robot_orientation(ep_chassis, target_yaw=0)
+    elif stable_distance < 600:
+        way[1] = 0 #ทางตัน
+        adjust_distance = (stable_distance-170)/1000
+        if adjust_distance > 0:
+            move_direction_pid_wall(ep_chassis, 'x+', adjust_distance)
+            if detect_red_color(ep_camera) :
+                checkmarkers(1,marker,ep_vision,0)
+            correct_robot_orientation(ep_chassis, target_yaw=0)
+    else:
+        way[1] = 1 #ทางไกล
+
+
+
+    # หันขวา
+    ep_gimbal.moveto(pitch=0, yaw=90, pitch_speed=350, yaw_speed=350).wait_for_completed()
+    time.sleep(0.1)
+    
+    stable_distance = get_stable_distance_reading()
+    print(f"หันขวา: raw={lastest_distance[0]:.0f}mm, stable={stable_distance:.0f}mm")
+    
+    if stable_distance < 200:
+        way[2] = 0 #ทางตัน
+        
+        adjust_distance = (170-stable_distance)/1000
+        if adjust_distance > 0:
+            move_direction_pid_wall(ep_chassis, 'y-', adjust_distance)
+            if detect_red_color(ep_camera) :
+                checkmarkers(2,marker,ep_vision,90)
+            correct_robot_orientation(ep_chassis, target_yaw=0)
+    elif stable_distance < 600:
+        way[2] = 0 #ทางตัน
+        adjust_distance = (stable_distance-170)/1000
+        if adjust_distance > 0:
+            move_direction_pid_wall(ep_chassis, 'y+', adjust_distance)
+            if detect_red_color(ep_camera) :
+                checkmarkers(2,marker,ep_vision,90)
+            correct_robot_orientation(ep_chassis, target_yaw=0)
+    else:
+        way[2] = 1 #ทางไกล
+
+
+            
+    # หันหลัง
+    ep_gimbal.moveto(pitch=0, yaw=180, pitch_speed=350, yaw_speed=350).wait_for_completed()
+    time.sleep(0.1)
+    
+    stable_distance = get_stable_distance_reading()
+    print(f"หันหลัง: raw={lastest_distance[0]:.0f}mm, stable={stable_distance:.0f}mm")
+    
+    if stable_distance < 200:
+        way[3] = 0 #ทางตัน
+        adjust_distance = (200-stable_distance)/1000
+        if adjust_distance > 0:
+            move_direction_pid_wall(ep_chassis, 'x+', adjust_distance)
+            if detect_red_color(ep_camera) :
+                checkmarkers(3,marker,ep_vision,180)
+            correct_robot_orientation(ep_chassis, target_yaw=0)
+    elif stable_distance < 600:
+        way[3] = 0 #ทางตัน
+        adjust_distance = (stable_distance-200)/1000
+        if adjust_distance > 0:
+            move_direction_pid_wall(ep_chassis, 'x-', adjust_distance)
+            if detect_red_color(ep_camera) :
+                checkmarkers(3,marker,ep_vision,180)
+            correct_robot_orientation(ep_chassis, target_yaw=0)
+    else:
+        way[3] = 1 #ทางไกล
+
+
+
+    # หันกลับด้านหน้าและปรับทิศทางสุดท้าย
+    ep_gimbal.moveto(pitch=0, yaw=0, pitch_speed=500, yaw_speed=500).wait_for_completed()
+    time.sleep(0.1)
+    
+    print("🧭 ปรับทิศทางสุดท้ายหลังสแกน...")
     correct_robot_orientation(ep_chassis, target_yaw=0)
-
-    print(f"📊 way: {way}")
-    print(f"📊 tof_wall: {tof_wall}")
-    print(f"📍 marker: {marker}")
-    return way, marker, tof_wall
+    
+    print(f"📊 ผลการสแกนหลังกรอง: {way} [ซ้าย, หน้า, ขวา, หลัง]")
+    print(f"📍 ผลการสแกน Marker: {marker} [ซ้าย, หน้า, ขวา, หลัง]")
+    return way, marker  # คืนค่า way และ marker
 
 
 # --- ฟังก์ชันหลักในการสำรวจด้วย DFS ---
@@ -320,8 +422,8 @@ def explore_from(current_coords, ep_chassis, ep_gimbal, ep_vision,ep_camera):
         tof_readings.clear()
         time.sleep(0.1)  # รอให้ buffer เติมข้อมูลใหม่
 
-        available_ways,marker, tof_wall = move_gimbal(ep_gimbal, ep_chassis, ep_vision,ep_camera)
-        move_to_tile_center_from_walls(ep_chassis, available_ways, marker, tof_wall, tile_size=0.4)
+        available_ways,marker = move_gimbal(ep_gimbal, ep_chassis, ep_vision,ep_camera)
+        # move_to_tile_center_from_walls(ep_chassis, available_ways, marker, tof_wall, tile_size=0.4, ep_gimbal=ep_gimbal)
         correct_robot_orientation(ep_chassis, target_yaw=0)
 
         scan_memory[current_coords] = available_ways
@@ -372,7 +474,7 @@ def explore_from(current_coords, ep_chassis, ep_gimbal, ep_vision,ep_camera):
                 # ใช้ PID สำหรับการเคลื่อนที่สำรวจ
                 move_direction_pid(ep_chassis, direction_info['direction'], STEP_SIZE)
                 # available_ways2, marker, tof_wall = move_gimbal(ep_gimbal, ep_chassis, ep_vision, ep_camera)
-                # move_to_tile_center_from_walls(ep_chassis, available_ways, marker, tof_wall, tile_size=0.4)
+                # move_to_tile_center_from_walls(ep_chassis, available_ways, marker, tof_wall, tile_size=0.4, ep_gimbal=ep_gimbal)
 
                 explore_from(next_coords, ep_chassis, ep_gimbal,ep_vision,ep_camera)
 
@@ -391,8 +493,8 @@ def explore_from(current_coords, ep_chassis, ep_gimbal, ep_vision,ep_camera):
                 
                 # ใช้ PID สำหรับการเคลื่อนที่ย้อนกลับ
                 move_direction_pid(ep_chassis, reverse_direction, STEP_SIZE)
-                available_ways2, marker, tof_wall = move_gimbal(ep_gimbal, ep_chassis, ep_vision, ep_camera)
-                move_to_tile_center_from_walls(ep_chassis, available_ways, marker, tof_wall, tile_size=0.4)
+                available_ways2, marker = move_gimbal(ep_gimbal, ep_chassis, ep_vision, ep_camera)
+                # move_to_tile_center_from_walls(ep_chassis, available_ways, marker, tof_wall, tile_size=0.4, ep_gimbal=ep_gimbal)
                 correct_robot_orientation(ep_chassis, target_yaw=0)
                 
                 # **หันกิมบอลกลับด้านหน้าหลังเดินกลับเสร็จ**
