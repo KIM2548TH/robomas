@@ -310,3 +310,58 @@ def move_right_pid(ep_chassis, distance):
 def move_left_pid(ep_chassis, distance):
     """เดินไปซ้าย (y-) ด้วย PID"""
     return move_direction_pid(ep_chassis, 'y-', distance)
+
+
+def move_to_tile_center_from_walls(ep_chassis, way, marker, tof_wall, tile_size=0.6):
+    """
+    รับ way, marker, tof_wall (list 4 ช่อง) จาก move_gimbal
+    จะคำนวณขอบเขตบล็อก 0.6x0.6m อ้างอิงตำแหน่งปัจจุบัน แล้วเดินไปจุดกึ่งกลางบล็อกนั้น
+    ถ้ามีข้อมูลกำแพงเฉพาะบางแกน จะปรับเฉพาะแกนนั้น
+    """
+    global latest_chassis_position
+
+    # แปลงข้อมูลเป็น dict เฉพาะทิศที่เป็นกำแพง
+    wall = {}
+    dir_map = ['left', 'front', 'right', 'back']
+    for i in range(4):
+        if way[i] == 0 and tof_wall[i] is not None:
+            wall[dir_map[i]] = tof_wall[i]
+
+    # ตำแหน่งปัจจุบัน
+    x_now, y_now = latest_chassis_position[0], latest_chassis_position[1]
+
+    # กำหนดขอบเขตเริ่มต้น (± tile_size/2)
+    min_x = (x_now - tile_size/2)+0.10
+    max_x = (x_now + tile_size/2)-0.10
+    min_y = (y_now - tile_size/2)
+    max_y = (y_now + tile_size/2)
+
+    # ปรับขอบเขตตาม ToF ที่วัดได้ (อ้างอิงตำแหน่งปัจจุบัน)
+    if 'left' in wall:
+        min_y = y_now - wall['left']
+        max_y = min_y + tile_size
+    elif 'right' in wall:
+        max_y = y_now + wall['right']
+        min_y = max_y - tile_size
+
+    if 'front' in wall:
+        max_x = x_now + wall['front']
+        min_x = max_x - tile_size
+    elif 'back' in wall:
+        min_x = x_now - wall['back']
+        max_x = min_x + tile_size
+
+    # จุดกึ่งกลางบล็อก
+    center_x = (min_x + max_x) / 2
+    center_y = (min_y + max_y) / 2
+
+    print(f"🟦 ขอบเขต: x={min_x:.3f}~{max_x:.3f}, y={min_y:.3f}~{max_y:.3f}")
+    print(f"🎯 จุดกึ่งกลาง: ({center_x:.3f}, {center_y:.3f})")
+    print(f"📍 ตำแหน่งปัจจุบัน: ({x_now:.3f}, {y_now:.3f})")
+    print(f"🔖 marker: {marker}")
+
+    # เดินไปจุดกึ่งกลาง เฉพาะแกนที่มีข้อมูล
+    if ('front' in wall or 'back' in wall):
+        move_direction_pid(ep_chassis, 'x+', center_x - x_now)
+    if ('left' in wall or 'right' in wall):
+        move_direction_pid(ep_chassis, 'y+', center_y - y_now)
