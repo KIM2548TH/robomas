@@ -125,9 +125,9 @@ def move_direction_pid(ep_chassis, direction, distance):
     
     # เริ่มต้น PID controllers
     if move_pid_x is None:
-        move_pid_x = PID(kp=2.0, ki=0.01, kd=0.003)
+        move_pid_x = PID(kp=2.0, ki=0.01, kd=0)
     if move_pid_y is None:
-        move_pid_y = PID(kp=2.0, ki=0.01, kd=0.003)
+        move_pid_y = PID(kp=2.0, ki=0.01, kd=0)
     
     # รีเซ็ต PID
     move_pid_x.reset()
@@ -140,9 +140,9 @@ def move_direction_pid(ep_chassis, direction, distance):
     target_x = start_pos[0] + (distance * dir_info['x'])
     target_y = start_pos[1] + (distance * dir_info['y'])
     
-    tolerance = 0.01  # 1cm
+    tolerance = 0.05  # 1cm
     stable_iterations = 0
-    max_iterations = 200
+    max_iterations = 50
     iteration = 0
     
     print(f"📍 เริ่มต้นที่: ({start_pos[0]:.3f}, {start_pos[1]:.3f})")
@@ -164,7 +164,7 @@ def move_direction_pid(ep_chassis, direction, distance):
         # แสดงความคืบหน้าทุกๆ 0.5 วินาที
         if iteration % 25 == 0:
             progress = min(100, (current_distance / distance) * 100) if distance > 0 else 100
-            print(f"   📊 {current_distance:.3f}m/{distance:.3f}m ({progress:.1f}%) error:{total_error:.3f}m")
+            # print(f"   📊 {current_distance:.3f}m/{distance:.3f}m ({progress:.1f}%) error:{total_error:.3f}m")
         
         # ตรวจสอบว่าถึงเป้าหมายแล้วหรือไม่
         if total_error < tolerance:
