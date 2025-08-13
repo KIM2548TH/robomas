@@ -51,7 +51,7 @@ def correct_robot_orientation(ep_chassis, target_yaw=0):
     print(f"🧭 ปรับทิศทาง: ปัจจุบัน {current_yaw:.1f}° -> เป้าหมาย {target_yaw:.1f}° (ต้องหมุน {yaw_error:.1f}°)")
     
     # ถ้าผิดพลาดน้อยกว่า 2 องศา ไม่ต้องปรับ
-    if abs(yaw_error) < 2.0:
+    if abs(yaw_error) < 0.1:
         print("✅ ทิศทางถูกต้องแล้ว")
         return
     
@@ -249,7 +249,7 @@ def move_direction_pid_wall(ep_chassis, direction, distance):
     
     tolerance = 0.05  # 5cm สำหรับการปรับตำแหน่ง
     stable_iterations = 0
-    max_iterations = 120  # ลดลงเพื่อไม่ให้ใช้เวลานาน
+    max_iterations = 200  # ลดลงเพื่อไม่ให้ใช้เวลานาน
     iteration = 0
     
     while iteration < max_iterations:
@@ -263,7 +263,7 @@ def move_direction_pid_wall(ep_chassis, direction, distance):
         # ตรวจสอบว่าถึงเป้าหมายแล้วหรือไม่
         if total_error < tolerance:
             stable_iterations += 1
-            if stable_iterations >= 10:
+            if stable_iterations >= 45:
                 print("✅ ปรับตำแหน่งเสร็จ!")
                 break
         else:

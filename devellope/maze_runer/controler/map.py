@@ -10,12 +10,17 @@ class Node:
         self.is_exit = is_exit
         self.connections = {}  # {neighbor_id: distance}
         self.blocked_directions = []  # เก็บข้อมูลสแกน [y-, x+, y+, x-]
-        self.marker = []
+        self.marker_directions = []
     
     def add_blocked_direction(self, direction):
         """บันทึกข้อมูลสแกนตรงๆ [0,0,0,0]"""
         if direction:
             self.blocked_directions = direction  # บันทึกตรงๆ
+
+    def add_marker_direction(self, direction):
+        """บันทึกข้อมูลสแกนตรงๆ [0,0,0,0]"""
+        if direction:
+            self.marker_directions = direction  # บันทึกตรงๆ
     
     def __repr__(self):
         blocked_str = f", scan_data={self.blocked_directions}" if self.blocked_directions else ""
@@ -40,6 +45,14 @@ class Graph:
         if node_id in self.nodes:
             self.nodes[node_id].add_blocked_direction(direction)
             print(f"🗺️  บันทึกข้อมูลสแกน: โหนด {node_id} = {direction}")
+        else:
+            print(f"❌ ไม่พบโหนด {node_id}")
+
+    def add_marker_direction_to_node(self, node_id, direction):
+        """บันทึกข้อมูลสแกนลงโหนด"""
+        if node_id in self.nodes:
+            self.nodes[node_id].add_marker_direction(direction)
+            print(f"🗺️  บันทึกข้อมูลสแกน marker: โหนด {node_id} = {direction}")
         else:
             print(f"❌ ไม่พบโหนด {node_id}")
 

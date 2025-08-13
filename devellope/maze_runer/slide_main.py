@@ -20,6 +20,8 @@ from robomaster import robot
 from collections import deque
 import statistics  # **เพิ่ม: สำหรับ median filter**
 import math
+import numpy as np
+import cv2
 
 from controler.map import Graph  # **เพิ่ม: นำเข้า Graph**
 from controler.movement_slide import (
@@ -47,6 +49,39 @@ scan_memory = {}  # !! เพิ่ม: หน่วยความจำสำ�
 # **เพิ่ม: Map System**
 maze_graph = Graph()  # กราฟแมพ
 coord_to_node_id = {}  # แมพพิกัดกับ node_id
+
+
+class MarkerInfo:
+
+    def __init__(self, x, y, w, h, info):
+        self._x = x
+        self._y = y
+        self._w = w
+        self._h = h
+        self._info = info
+
+    @property
+    def pt1(self):
+        return int((self._x - self._w / 2) * 1280), int((self._y - self._h / 2) * 720)
+
+    @property
+    def pt2(self):
+        return int((self._x + self._w / 2) * 1280), int((self._y + self._h / 2) * 720)
+
+    @property
+    def center(self):
+        return int(self._x * 1280), int(self._y * 720)
+
+    @property
+    def text(self):
+        return self._info
+
+
+markers = []
+def on_detect_marker(marker_info):
+    x, y, w, h, info = marker_info[0]
+    markers.append(MarkerInfo(x, y, w, h, info))
+    print("marker:{0} x:{1}, y:{2}, w:{3}, h:{4}".format(info, x, y, w, h))
 
 # --- ฟังก์ชัน Helper ---
 def format_coords(coords):
@@ -78,8 +113,8 @@ def apply_median_filter(new_value):
     filtered_distance[0] = filtered_value
     
     # แสดงข้อมูลการกรอง (เฉพาะเมื่อค่าเปลี่ยนแปลงมาก)
-    if abs(new_value - filtered_value) > 50:
-        print(f"🔧 ToF Filter: raw={new_value:.0f}mm -> filtered={filtered_value:.0f}mm (buffer: {list(tof_readings)})")
+    # if abs(new_value - filtered_value) > 50:
+    #     # print(f"🔧 ToF Filter: raw={new_value:.0f}mm -> filtered={filtered_value:.0f}mm (buffer: {list(tof_readings)})")
     
     return filtered_value
 
@@ -118,43 +153,132 @@ def get_stable_distance_reading():
     
     return stable_value
 
+def checkmarkers(i,marker,ep_vision,x,qua, adjust_distance,ep_chassis):
+    global markers
+    markers.clear()
+    ep_gimbal.moveto(pitch=-360, yaw=x, pitch_speed=300, yaw_speed=300).wait_for_completed()
+    ep_vision.sub_detect_info(name="marker", callback=on_detect_marker)
+    stable_distance = get_stable_distance_reading()
+    time.sleep(0.25)  # *เพิ่มเวลาให้เซ็นเซอร์ stable*
+
+    if markers:
+        print(f"📍 พบ Marker ที่ทิศทางซ้าย: {markers[0].text}")
+        marker[i] = markers[0].text  # *บันทึกข้อมูล Marker*
+        
+        # ep_vision.unsub_detect_info(name="marker")
+    else:
+        # markers.clear()
+        move_direction_pid_wall(ep_chassis, qua, (stable_distance-230)/1000)
+        ep_gimbal.moveto(pitch=-4, yaw=x, pitch_speed=300, yaw_speed=300).wait_for_completed()
+        ep_gimbal.moveto(pitch=-360, yaw=x, pitch_speed=300, yaw_speed=300).wait_for_completed()
+        # ep_vision.sub_detect_info(name="marker", callback=on_detect_marker)
+
+        time.sleep(0.05)
+        if markers:
+            print(f"📍 พบ Marker ที่ทิศทางซ้าย: {markers[0].text}")
+            marker[i] = markers[0].text  # *บันทึกข้อมูล Marker*
+        else:
+            print(f"📍 ไม่พบ Marker !!!!!!!!!!!!!!")
+        
+        # ep_chassis.move(x=-0.05, y=0, z=0, xy_speed=0.7).wait_for_completed()
+        stable_distance = get_stable_distance_reading()
+        move_direction_pid_wall(ep_chassis, qua, (stable_distance-200)/1000)
+    
+    ep_vision.unsub_detect_info(name="marker")
+
+def detect_red_color(ep_camera):
+    time.sleep(0.5)
+    """
+    ตรวจจับสีแดงจากภาพที่ได้จากกล้อง Robomaster
+    Args:
+        ep_camera (robomaster.camera): camera module ของ Robomaster
+    Returns:
+        bool: True หากพบสีแดง, False หากไม่พบ
+    """
+    img = ep_camera.read_cv2_image()
+    if img is None:
+        print("❌ ไม่สามารถอ่านภาพจากกล้องได้")
+        return False
+
+    # ลด noise
+    img_blur = cv2.GaussianBlur(img, (5, 5), 0)
+
+    # แปลงเป็น HSV
+    hsv_img = cv2.cvtColor(img_blur, cv2.COLOR_BGR2HSV)
+
+    # ช่วงสีแดงแบบกว้างขึ้น
+    lower_red1 = np.array([0, 80, 80])    # Hue ต่ำ, เพิ่ม S/V ให้สูงขึ้น
+    upper_red1 = np.array([10, 255, 255])
+
+    lower_red2 = np.array([170, 80, 80])  # Hue สูง
+    upper_red2 = np.array([180, 255, 255])
+
+    mask1 = cv2.inRange(hsv_img, lower_red1, upper_red1)
+    mask2 = cv2.inRange(hsv_img, lower_red2, upper_red2)
+
+    final_mask = mask1 + mask2
+
+    # เปิด/ปิดช่องว่างเล็กๆ ใน mask
+    kernel = np.ones((5, 5), np.uint8)
+    final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, kernel)
+    final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel)
+
+    # ตรวจจับ pixel สีแดง
+    red_pixels = np.count_nonzero(final_mask)
+    if red_pixels > 5000:  # ปรับ threshold ตามความเหมาะสม
+        print(f"✅ พบสีแดง ({red_pixels} pixels)")
+        return True
+    else:
+        print(f"❌ ไม่พบสีแดง ({red_pixels} pixels)")
+        return False
+
+
+
 # --- ฟังก์ชันสแกนที่ปรับปรุงด้วย Median Filter ---
-def move_gimbal(ep_gimbal, ep_chassis):
+def move_gimbal(ep_gimbal, ep_chassis,ep_vision,ep_camera):
     """
     ฟังก์ชันสแกน 4 ทิศทาง + Median Filter + ปรับทิศทางให้ตรง
     """
     way = [0, 0, 0, 0] # [ซ้าย, หน้า, ขวา, หลัง]
+    marker = ["No", "No", "No", "No"] # [ซ้าย, หน้า, ขวา, หลัง]
 
     print("🧭 ตรวจสอบและปรับทิศทางก่อนสแกน...")
     correct_robot_orientation(ep_chassis, target_yaw=0)
-    time.sleep(0.1)
+    time.sleep(0.05)
 
     # หันซ้าย
-    ep_gimbal.moveto(pitch=0, yaw=-90, pitch_speed=300, yaw_speed=300).wait_for_completed()
-    time.sleep(0.1)  # **เพิ่มเวลาให้เซ็นเซอร์ stable**
+    ep_gimbal.moveto(pitch=-6, yaw=-90, pitch_speed=300, yaw_speed=300).wait_for_completed()
+    time.sleep(0.05)  # *เพิ่มเวลาให้เซ็นเซอร์ stable*
     
-    # **ใช้การอ่านค่าแบบ stable**
+    # *ใช้การอ่านค่าแบบ stable*
     stable_distance = get_stable_distance_reading()
     print(f"หันซ้าย: raw={lastest_distance[0]:.0f}mm, stable={stable_distance:.0f}mm")
     
     if stable_distance < 200:
         way[0] = 0 #ทางตัน
         adjust_distance = (170-stable_distance)/1000
-        if adjust_distance > 0:  # **ป้องกันค่าติดลบ**
+        if adjust_distance > 0:  # *ป้องกันค่าติดลบ*
             move_direction_pid_wall(ep_chassis, 'y+', adjust_distance)
+            if detect_red_color(ep_camera) :  # *ตรวจจับสีแดง*
+                checkmarkers(0,marker,ep_vision,-90, 'y+', adjust_distance,ep_chassis)
             correct_robot_orientation(ep_chassis, target_yaw=0)
     elif stable_distance < 600:
         way[0] = 0 #ทางตัน
         adjust_distance = (stable_distance-170)/1000
-        if adjust_distance > 0:  # **ป้องกันค่าติดลบ**
+        if adjust_distance > 0:  # *ป้องกันค่าติดลบ*
             move_direction_pid_wall(ep_chassis, 'y-', adjust_distance)
+            if detect_red_color(ep_camera) :  # *ตรวจจับสีแดง*
+                checkmarkers(0,marker,ep_vision,-90, 'y-', adjust_distance,ep_chassis)
             correct_robot_orientation(ep_chassis, target_yaw=0)
     else:
         way[0] = 1 #ทางไกล
+    
+
+    
 
     # หันหน้า
-    ep_gimbal.moveto(pitch=0, yaw=0, pitch_speed=300, yaw_speed=300).wait_for_completed()
-    time.sleep(0.1)
+    ep_gimbal.moveto(pitch=-6, yaw=0, pitch_speed=300, yaw_speed=300).wait_for_completed()
+    time.sleep(0.05)
     
     stable_distance = get_stable_distance_reading()
     print(f"หันกลาง: raw={lastest_distance[0]:.0f}mm, stable={stable_distance:.0f}mm")
@@ -164,41 +288,54 @@ def move_gimbal(ep_gimbal, ep_chassis):
         adjust_distance = (170-stable_distance)/1000
         if adjust_distance > 0:
             move_direction_pid_wall(ep_chassis, 'x-', adjust_distance)
+            if detect_red_color(ep_camera) :
+                checkmarkers(1,marker,ep_vision,0, 'x-', adjust_distance,ep_chassis)
             correct_robot_orientation(ep_chassis, target_yaw=0)
     elif stable_distance < 600:
         way[1] = 0 #ทางตัน
         adjust_distance = (stable_distance-170)/1000
         if adjust_distance > 0:
             move_direction_pid_wall(ep_chassis, 'x+', adjust_distance)
+            if detect_red_color(ep_camera) :
+                checkmarkers(1,marker,ep_vision,0, 'x+', adjust_distance,ep_chassis)
             correct_robot_orientation(ep_chassis, target_yaw=0)
     else:
         way[1] = 1 #ทางไกล
 
+
+
     # หันขวา
-    ep_gimbal.moveto(pitch=0, yaw=90, pitch_speed=300, yaw_speed=300).wait_for_completed()
-    time.sleep(0.1)
+    ep_gimbal.moveto(pitch=-6, yaw=90, pitch_speed=300, yaw_speed=300).wait_for_completed()
+    time.sleep(0.05)
     
     stable_distance = get_stable_distance_reading()
     print(f"หันขวา: raw={lastest_distance[0]:.0f}mm, stable={stable_distance:.0f}mm")
     
     if stable_distance < 200:
         way[2] = 0 #ทางตัน
+        
         adjust_distance = (170-stable_distance)/1000
         if adjust_distance > 0:
             move_direction_pid_wall(ep_chassis, 'y-', adjust_distance)
+            if detect_red_color(ep_camera) :
+                checkmarkers(2,marker,ep_vision,90, 'y+', adjust_distance,ep_chassis)
             correct_robot_orientation(ep_chassis, target_yaw=0)
     elif stable_distance < 600:
         way[2] = 0 #ทางตัน
         adjust_distance = (stable_distance-170)/1000
         if adjust_distance > 0:
             move_direction_pid_wall(ep_chassis, 'y+', adjust_distance)
+            if detect_red_color(ep_camera) :
+                checkmarkers(2,marker,ep_vision,90, 'y-', adjust_distance,ep_chassis)
             correct_robot_orientation(ep_chassis, target_yaw=0)
     else:
         way[2] = 1 #ทางไกล
 
+
+            
     # หันหลัง
-    ep_gimbal.moveto(pitch=0, yaw=170, pitch_speed=300, yaw_speed=300).wait_for_completed()
-    time.sleep(0.1)
+    ep_gimbal.moveto(pitch=-6, yaw=180, pitch_speed=300, yaw_speed=300).wait_for_completed()
+    time.sleep(0.05)
     
     stable_distance = get_stable_distance_reading()
     print(f"หันหลัง: raw={lastest_distance[0]:.0f}mm, stable={stable_distance:.0f}mm")
@@ -208,28 +345,35 @@ def move_gimbal(ep_gimbal, ep_chassis):
         adjust_distance = (200-stable_distance)/1000
         if adjust_distance > 0:
             move_direction_pid_wall(ep_chassis, 'x+', adjust_distance)
+            if detect_red_color(ep_camera) :
+                checkmarkers(3,marker,ep_vision,180, 'x-', adjust_distance,ep_chassis)
             correct_robot_orientation(ep_chassis, target_yaw=0)
     elif stable_distance < 600:
         way[3] = 0 #ทางตัน
         adjust_distance = (stable_distance-200)/1000
         if adjust_distance > 0:
             move_direction_pid_wall(ep_chassis, 'x-', adjust_distance)
+            if detect_red_color(ep_camera) :
+                checkmarkers(3,marker,ep_vision,180, 'x+', adjust_distance,ep_chassis)
             correct_robot_orientation(ep_chassis, target_yaw=0)
     else:
         way[3] = 1 #ทางไกล
 
+
+
     # หันกลับด้านหน้าและปรับทิศทางสุดท้าย
-    ep_gimbal.moveto(pitch=0, yaw=0, pitch_speed=500, yaw_speed=500).wait_for_completed()
-    time.sleep(0.1)
+    ep_gimbal.moveto(pitch=-6, yaw=0, pitch_speed=500, yaw_speed=500).wait_for_completed()
+    time.sleep(0.05)
     
     print("🧭 ปรับทิศทางสุดท้ายหลังสแกน...")
     correct_robot_orientation(ep_chassis, target_yaw=0)
     
     print(f"📊 ผลการสแกนหลังกรอง: {way} [ซ้าย, หน้า, ขวา, หลัง]")
-    return way
+    print(f"📍 ผลการสแกน Marker: {marker} [ซ้าย, หน้า, ขวา, หลัง]")
+    return way, marker  # คืนค่า way และ marker
 
 # --- ฟังก์ชันหลักในการสำรวจด้วย DFS ---
-def explore_from(current_coords, ep_chassis, ep_gimbal):
+def explore_from(current_coords, ep_chassis, ep_gimbal, ep_vision,ep_camera):
     """
     ฟังก์ชัน DFS หลัก ทำงานแบบ Recursive เพื่อสำรวจจากพิกัดปัจจุบัน
     """
@@ -264,13 +408,15 @@ def explore_from(current_coords, ep_chassis, ep_gimbal):
         # **รีเซ็ต median filter buffer เมื่อเริ่มสแกนใหม่**
         tof_readings.clear()
         time.sleep(0.1)  # รอให้ buffer เติมข้อมูลใหม่
-        
-        available_ways = move_gimbal(ep_gimbal, ep_chassis)
+
+        available_ways,marker = move_gimbal(ep_gimbal, ep_chassis, ep_vision,ep_camera)
         scan_memory[current_coords] = available_ways
         print(f"🔬 ผลการสแกนถูกบันทึก: {available_ways}")
         
         # **บันทึกข้อมูลสแกน**
         maze_graph.add_blocked_direction_to_node(node_id, available_ways)
+        maze_graph.add_marker_direction_to_node(node_id, marker)
+
 
     # 3. นิยามทิศทางและการเปลี่ยนแปลงของพิกัด พร้อมมุมกิมบอล
     direction_map = [
@@ -306,13 +452,13 @@ def explore_from(current_coords, ep_chassis, ep_gimbal):
                 # **หันกิมบอลไปทางที่จะเดิน**
                 gimbal_yaw = direction_info['gimbal_yaw']
                 print(f"     🎯 หันกิมบอลไป {gimbal_yaw}° ({direction_info['name']})")
-                ep_gimbal.moveto(pitch=0, yaw=gimbal_yaw, pitch_speed=300, yaw_speed=300).wait_for_completed()
+                ep_gimbal.moveto(pitch=-6, yaw=gimbal_yaw, pitch_speed=300, yaw_speed=300).wait_for_completed()
                 time.sleep(0.1)
                 
                 # ใช้ PID สำหรับการเคลื่อนที่สำรวจ
                 move_direction_pid(ep_chassis, direction_info['direction'], STEP_SIZE)
 
-                explore_from(next_coords, ep_chassis, ep_gimbal)
+                explore_from(next_coords, ep_chassis, ep_gimbal,ep_vision,ep_camera)
 
                 print(f"  <- ⏪ สไลด์กลับจาก {format_coords(next_coords)} มายัง {format_coords(current_coords)}...")
                 
@@ -324,7 +470,7 @@ def explore_from(current_coords, ep_chassis, ep_gimbal):
                 reverse_gimbal_yaw = reverse_gimbal_map[direction_info['direction']]
                 
                 print(f"     🔄 หันกิมบอลไป {reverse_gimbal_yaw}° (ย้อนกลับ)")
-                ep_gimbal.moveto(pitch=0, yaw=reverse_gimbal_yaw, pitch_speed=300, yaw_speed=300).wait_for_completed()
+                ep_gimbal.moveto(pitch=-6, yaw=reverse_gimbal_yaw, pitch_speed=300, yaw_speed=300).wait_for_completed()
                 time.sleep(0.1)
                 
                 # ใช้ PID สำหรับการเคลื่อนที่ย้อนกลับ
@@ -332,7 +478,7 @@ def explore_from(current_coords, ep_chassis, ep_gimbal):
                 
                 # **หันกิมบอลกลับด้านหน้าหลังเดินกลับเสร็จ**
                 print(f"     🏠 หันกิมบอลกลับด้านหน้า (0°)")
-                ep_gimbal.moveto(pitch=0, yaw=0, pitch_speed=300, yaw_speed=300).wait_for_completed()
+                ep_gimbal.moveto(pitch=-6, yaw=0, pitch_speed=300, yaw_speed=300).wait_for_completed()
                 time.sleep(0.1)
                 
             else:
@@ -350,7 +496,7 @@ def explore_from(current_coords, ep_chassis, ep_gimbal):
                         maze_graph.add_edge(current_node_id, next_node_id, distance)
     
     print(f"✅ สำรวจจาก {format_coords(current_coords)} ครบทุกแขนงแล้ว")
-
+from robomaster import camera
 
 if __name__ == '__main__':
     ep_robot = robot.Robot()
@@ -359,6 +505,8 @@ if __name__ == '__main__':
     ep_gimbal = ep_robot.gimbal
     ep_sensor = ep_robot.sensor
     ep_chassis = ep_robot.chassis
+    ep_vision = ep_robot.vision
+    ep_camera = ep_robot.camera
 
     print("===== 🤖 เริ่มการสำรวจแผนที่ด้วย DFS + PID Movement + ToF Median Filter + Map System =====")
     
@@ -366,6 +514,8 @@ if __name__ == '__main__':
     ep_sensor.sub_distance(freq=50, callback=sub_data_distance)  # **ToF กับ median filter**
     ep_chassis.sub_position(freq=50, callback=sub_chassis_position)
     ep_chassis.sub_attitude(freq=20, callback=sub_chassis_attitude)
+    ep_camera.start_video_stream(display=True, resolution=camera.STREAM_360P)  # **เริ่มสตรีมวิดีโอจากกล้อง**
+    
     time.sleep(0.5)  # **เพิ่มเวลารอให้ median filter buffer เติม**
 
     print(f"🔧 Median Filter เริ่มต้นแล้ว (buffer size: {tof_readings.maxlen})")
@@ -373,7 +523,8 @@ if __name__ == '__main__':
 
     try:
         start_node = (0.0, 0.0)
-        explore_from(start_node, ep_chassis, ep_gimbal)
+        explore_from(start_node, ep_chassis, ep_gimbal, ep_vision, ep_camera)
+
         
         # **แสดงสรุปแมพหลังสำรวจเสร็จ**
         print("\n" + "="*60)
@@ -386,9 +537,11 @@ if __name__ == '__main__':
         for node_id, node in maze_graph.nodes.items():
             connections = list(node.connections.keys())
             blocked = node.blocked_directions
+            marker = node.marker_directions
             print(f"   โหนด {node_id}: ({node.x:.2f}, {node.y:.2f})")
             print(f"     - เชื่อมต่อกับ: {connections}")
             print(f"     - ข้อมูลสแกน: {blocked}")  # [y-, x+, y+, x-]
+            print(f"     - ข้อมูลสแกน marker: {marker}")
         print("="*60)
         
     except Exception as e:
@@ -398,5 +551,7 @@ if __name__ == '__main__':
         ep_sensor.unsub_distance()
         ep_chassis.unsub_position()
         ep_chassis.unsub_attitude()
+        
+        ep_camera.stop_video_stream()
         time.sleep(1)
         ep_robot.close()
