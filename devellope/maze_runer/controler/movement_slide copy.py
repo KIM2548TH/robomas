@@ -1,119 +1,50 @@
 # -*-coding:utf-8-*-
-import csv
-import os
-import time
 import statistics
+import time
 import math
-from collections import deque
-
 from .pid import PID, TurnPID
 from logger import log_robot_data
 
-# --- Global Variables ---
-latest_chassis_position = [0, 0, 0]
-latest_chassis_attitude = [0, 0, 0]
-lastest_distance = [0]
-tof_readings = deque(maxlen=5)   # <-- แก้จาก list เป็น deque
-filtered_distance = [0]
-markers = []
-
-LOG_CSV_PATH = "robot_log.csv"
-log_csv_header_written = False
-
-def log_robot_data():
-    global log_csv_header_written
-    timestamp = time.time()
-    position = list(latest_chassis_position)
-    tof1 = filtered_distance[0]  # ใช้ค่าที่ผ่านฟิลเตอร์แล้ว
-    # ... (ส่วนอื่นเหมือนเดิม)
-    # รองรับ marker เป็น object หรือ string
-    if markers:
-        marker_last = markers[-1]
-        marker_name = marker_last.text if hasattr(marker_last, "text") else str(marker_last)
-    else:
-        marker_name = ""
-    yaw_gimbal = latest_chassis_attitude[0] if len(latest_chassis_attitude) > 0 else None
-
-    write_header = not os.path.exists(LOG_CSV_PATH) or not log_csv_header_written
-    with open(LOG_CSV_PATH, "a", newline="") as f:
-        writer = csv.writer(f)
-        if write_header:
-            writer.writerow(["timestamp", "position", "tof1", "marker", "yaw_gimbal"])
-            log_csv_header_written = True
-        writer.writerow([
-            timestamp,
-            f"{position[0]:.3f},{position[1]:.3f}",
-            tof1,
-            marker_name,
-            yaw_gimbal
-        ])
-
-def get_stable_distance_reading():
-    """
-    คืนค่าระยะทางที่ผ่าน median filter แล้ว (mm)
-    """
-    global filtered_distance
-    return filtered_distance[0]
-
-def apply_median_filter(new_value, buffer_size=7):
-    global tof_readings, filtered_distance
-    tof_readings.append(new_value)
-    if len(tof_readings) > buffer_size:
-        tof_readings.pop(0)
-    if len(tof_readings) >= 3:
-        filtered_value = statistics.median(tof_readings)
-    else:
-        filtered_value = sum(tof_readings) / len(tof_readings)
-    filtered_distance[0] = filtered_value
-    return filtered_value
-
-def sub_data_distance(sub_info):
-    global lastest_distance
-    raw_distance = sub_info[0]
-    filtered_value = apply_median_filter(raw_distance)
-    lastest_distance[0] = filtered_value
-    log_robot_data()
-
-def sub_chassis_position(position_info):
-    global latest_chassis_position
-    latest_chassis_position = list(position_info)
-    log_robot_data()
-
-def sub_chassis_attitude(attitude_info):
-    global latest_chassis_attitude
-    latest_chassis_attitude = list(attitude_info)
-    log_robot_data()
-
-def sub_data_angle(angle_info):
-    global latest_chassis_attitude
-    # สมมติ angle_info = [pitch, yaw, ...]
-    # ปรับตามข้อมูลจริงของ angle_info
-    if len(angle_info) >= 2:
-        latest_chassis_attitude[0] = angle_info[1]  # หรือปรับ index ตามจริง
-    log_robot_data()
-
-class MarkerInfo:
-    def __init__(self, x, y, w, h, info):
-        self._x = x
-        self._y = y
-        self._w = w
-        self._h = h
-        self._info = info
-    @property
-    def text(self):
-        return str(self._info)
-
-def on_detect_marker(marker_info):
-    global markers
-    x, y, w, h, info = marker_info[0]
-    markers.clear()  # <<== เพิ่มบรรทัดนี้
-    markers.append(MarkerInfo(x, y, w, h, info))
-    log_robot_data()
-
 # ตัวแปร global สำหรับ PID และ tracking
+latest_chassis_position = [0, 0, 0]
+latest_chassis_attitude = [0, 0, 0]  # **เพิ่ม: [yaw, pitch, roll]**
 move_pid_x = None
 move_pid_y = None
 turn_pid = None  # **เพิ่ม: PID สำหรับการหมุน**
+# ...existing global variables...
+lastest_distance = [0]
+tof_readings = []  # เพิ่ม buffer สำหรับ median filter
+
+def apply_median_filter(new_value, buffer_size=5):
+    """เพิ่มค่าใหม่เข้า buffer และคืนค่า median"""
+    global tof_readings
+    tof_readings.append(new_value)
+    if len(tof_readings) > buffer_size:
+        tof_readings.pop(0)
+    return statistics.median(tof_readings)
+
+def sub_data_distance(sub_info):
+    """Callback สำหรับ ToF (distance) พร้อม median filter"""
+    global lastest_distance
+    raw_distance = sub_info[0]
+    filtered_value = apply_median_filter(raw_distance)
+    lastest_distance[0] = filtered_value  # อัปเดตค่าที่ผ่าน median filter
+    log_robot_data(latest_chassis_position, lastest_distance, latest_chassis_attitude, markers)
+
+
+def sub_chassis_position(position_info):
+    """Callback สำหรับตำแหน่ง chassis"""
+    global latest_chassis_position
+    # **แก้ไข: แปลงเป็น list เสมอ**
+    latest_chassis_position = list(position_info)
+    log_robot_data(latest_chassis_position, lastest_distance, latest_chassis_attitude, markers)
+
+def sub_chassis_attitude(attitude_info):
+    """Callback สำหรับท่าทาง chassis (yaw, pitch, roll)"""
+    global latest_chassis_attitude
+    # **แก้ไข: แปลงเป็น list เสมอ**
+    latest_chassis_attitude = list(attitude_info)
+    log_robot_data(latest_chassis_position, lastest_distance, latest_chassis_attitude, markers)
 
 def correct_robot_orientation(ep_chassis, target_yaw=0):
     """
@@ -127,7 +58,7 @@ def correct_robot_orientation(ep_chassis, target_yaw=0):
     
     # เริ่มต้น PID สำหรับการหมุน
     if turn_pid is None:
-        turn_pid = TurnPID(kp=2.0*0.40, ki=0.007*0.40, kd=0.03*0.40)
+        turn_pid = TurnPID(kp=2.0, ki=0.01, kd=0.03)
     
     turn_pid.reset()
     
@@ -171,7 +102,7 @@ def correct_robot_orientation(ep_chassis, target_yaw=0):
         # ตรวจสอบว่าถึงเป้าหมายแล้ว
         if abs(angle_error) < tolerance:
             stable_count += 1
-            if stable_count >= 30:
+            if stable_count >= 10:
                 print("✅ ปรับทิศทางเสร็จ!")
                 break
         else:
@@ -294,28 +225,41 @@ def move_direction_pid(ep_chassis, direction, distance):
     time.sleep(0.2)
     return final_distance
 
-def move_direction_pid_with_emergency_brake(ep_chassis, direction, distance):
+def move_direction_pid2(ep_chassis, ep_gimbal, direction, distance):
     """
     เคลื่อนที่ไปยังทิศทางที่กำหนดด้วย PID control (ไม่หมุนตัว - สไลด์)
-    มีระบบกันชนฉุกเฉิน: ถ้า filtered_distance < 250mm จะหยุดทันที
+    หันกิมบอลไปทาง direction ก่อนเสมอ
     """
     global move_pid_x, move_pid_y, latest_chassis_position
-    from controler.movement_slide import filtered_distance
 
+    # แมปทิศทางกับมุม yaw ของกิมบอล
+    gimbal_yaw_map = {
+        'x+': 0,
+        'x-': 180,
+        'y+': 90,
+        'y-': -90
+    }
     direction_map = {
-        'x+': {'x': 1, 'y': 0, 'name': 'ข้างหน้า (x+)'},
-        'x-': {'x': -1, 'y': 0, 'name': 'ข้างหลัง (x-)'},
-        'y+': {'x': 0, 'y': 1, 'name': 'ขวา (y+)'},
-        'y-': {'x': 0, 'y': -1, 'name': 'ซ้าย (y-)'}
+        'x+': {'x': 1, 'y': 0, 'name': 'ข้างหน้า (x+)'},     # ไปข้างหน้า
+        'x-': {'x': -1, 'y': 0, 'name': 'ข้างหลัง (x-)'},    # ไปข้างหลัง
+        'y+': {'x': 0, 'y': 1, 'name': 'ขวา (y+)'},          # ไปขวา
+        'y-': {'x': 0, 'y': -1, 'name': 'ซ้าย (y-)'}         # ไปซ้าย
     }
 
     if direction not in direction_map:
         print(f"❌ ทิศทางไม่ถูกต้อง: {direction}")
         return 0
 
+    # หันกิมบอลไปทิศทางที่จะเดิน
+    gimbal_yaw = gimbal_yaw_map[direction]
+    print(f"     🎯 หันกิมบอลไป {gimbal_yaw}° ({direction_map[direction]['name']})")
+    ep_gimbal.moveto(pitch=-6, yaw=gimbal_yaw, pitch_speed=400, yaw_speed=400).wait_for_completed()
+    time.sleep(0.1)
+
     dir_info = direction_map[direction]
     print(f"🚶 สไลด์{dir_info['name']} {distance:.3f}m")
 
+    # เริ่มต้น PID controllers
     if move_pid_x is None:
         move_pid_x = PID(kp=2.0, ki=0.01, kd=0)
     if move_pid_y is None:
@@ -339,16 +283,13 @@ def move_direction_pid_with_emergency_brake(ep_chassis, direction, distance):
     while iteration < max_iterations:
         iteration += 1
 
-        # Emergency brake: ถ้า ToF < 300mm ให้หยุดทันที
-        if filtered_distance[0] < 300:
-            print("🛑 Emergency Brake! ToF < 250mm")
-            ep_chassis.drive_speed(x=0, y=0, z=0)
-            ep_chassis.drive_speed(x=0, y=0, z=0)
-            ep_chassis.drive_speed(x=0, y=0, z=0)
-            ep_chassis.drive_speed(x=0, y=0, z=0)
-            ep_chassis.drive_speed(x=0, y=0, z=0)
-            ep_chassis.drive_speed(x=0, y=0, z=0)
-            ep_chassis.drive_speed(x=0, y=0, z=0)
+        # Interupt กันชน
+                # Interupt กันชน (import เฉพาะในฟังก์ชัน)
+        from slide_main import filtered_distance
+        distance_from_wall = filtered_distance[-1]  # mm
+        print(f"88888888888888888888{distance_from_wall} {distance:.3f}88888888888888")
+        if distance_from_wall < 250:
+            print("🛑 ใกล้กำแพงแล้ว (ToF < 250mm) [median filter]")
             ep_chassis.drive_speed(x=0, y=0, z=0)
             break
 
@@ -421,9 +362,9 @@ def move_direction_pid_wall(ep_chassis, direction, distance):
     
     # เริ่มต้น PID controllers
     if move_pid_x is None:
-        move_pid_x = PID(kp=2.0*0.75, ki=0.01*0.75, kd=0.03*0.75)
+        move_pid_x = PID(kp=2.0, ki=0.01, kd=0)
     if move_pid_y is None:
-        move_pid_y = PID(kp=2.0*0.75, ki=0.01*0.75, kd=0.03*0.75)
+        move_pid_y = PID(kp=2.0, ki=0.01, kd=0)
     
     # รีเซ็ต PID
     move_pid_x.reset()
@@ -501,195 +442,196 @@ def move_left_pid(ep_chassis, distance):
     return move_direction_pid(ep_chassis, 'y-', distance)
 
 
-def move_to_tile_center_from_walls(ep_chassis, way, marker, tof_wall, tile_size=0.6, ep_gimbal=None):
-    """
-    รับ way, marker, tof_wall (list 4 ช่อง) จาก move_gimbal
-    จะคำนวณขอบเขตบล็อก 0.6x0.6m อ้างอิงตำแหน่งปัจจุบัน แล้วเดินไปจุดกึ่งกลางบล็อกนั้น
-    ถ้ามีข้อมูลกำแพงเฉพาะบางแกน จะปรับเฉพาะแกนนั้น
-    ถ้ามีกำแพงเดียวหรือไม่เจอกำแพงเลย จะใช้ฟังก์ชันหาเสา
-    """
-    global latest_chassis_position
+# def move_to_tile_center_from_walls(ep_chassis, way, marker, tof_wall, tile_size=0.6, ep_gimbal=None):
+#     """
+#     รับ way, marker, tof_wall (list 4 ช่อง) จาก move_gimbal
+#     จะคำนวณขอบเขตบล็อก 0.6x0.6m อ้างอิงตำแหน่งปัจจุบัน แล้วเดินไปจุดกึ่งกลางบล็อกนั้น
+#     ถ้ามีข้อมูลกำแพงเฉพาะบางแกน จะปรับเฉพาะแกนนั้น
+#     ถ้ามีกำแพงเดียวหรือไม่เจอกำแพงเลย จะใช้ฟังก์ชันหาเสา
+#     """
+#     global latest_chassis_position
 
-    # แปลงข้อมูลเป็น dict เฉพาะทิศที่เป็นกำแพง
-    wall = {}
-    dir_map = ['left', 'front', 'right', 'back']
-    for i in range(4):
-        if way[i] == 0 and tof_wall[i] is not None:
-            wall[dir_map[i]] = tof_wall[i]
+#     # แปลงข้อมูลเป็น dict เฉพาะทิศที่เป็นกำแพง
+#     wall = {}
+#     dir_map = ['left', 'front', 'right', 'back']
+#     for i in range(4):
+#         if way[i] == 0 and tof_wall[i] is not None:
+#             wall[dir_map[i]] = tof_wall[i]
 
-    wall_count = len(wall)
-    if wall_count >= 2:
-        # ปกติ: ใช้สูตรเดิม
-        x_now, y_now = latest_chassis_position[0], latest_chassis_position[1]
-        min_x = x_now - tile_size/2
-        max_x = x_now + tile_size/2
-        min_y = (y_now - tile_size/2)
-        max_y = (y_now + tile_size/2)
+#     wall_count = len(wall)
+#     if wall_count >= 2:
+#         # ปกติ: ใช้สูตรเดิม
+#         x_now, y_now = latest_chassis_position[0], latest_chassis_position[1]
+#         min_x = x_now - tile_size/2
+#         max_x = x_now + tile_size/2
+#         min_y = y_now - tile_size/2
+#         max_y = y_now + tile_size/2
 
-        if 'left' in wall:
-            min_y = y_now - wall['left']#/1000
-            max_y = min_y + tile_size
-        elif 'right' in wall:
-            max_y = y_now + wall['right']#/1000
-            min_y = max_y - tile_size
+#         if 'left' in wall:
+#             min_y = y_now - wall['left']
+#             max_y = min_y + tile_size
+#         elif 'right' in wall:
+#             max_y = y_now + wall['right']
+#             min_y = max_y - tile_size
 
-        if 'front' in wall:
-            max_x = x_now + wall['front']#/1000
-            min_x = max_x - tile_size
-        elif 'back' in wall:
-            min_x = x_now - wall['back']#/1000
-            max_x = min_x + tile_size
+#         if 'front' in wall:
+#             max_x = x_now + wall['front']
+#             min_x = max_x - tile_size
+#         elif 'back' in wall:
+#             min_x = x_now - wall['back']
+#             max_x = min_x + tile_size
 
-        center_x = (min_x + max_x) / 2
-        center_y = (min_y + max_y) / 2
+#         center_x = (min_x + max_x) / 2
+#         center_y = (min_y + max_y) / 2
 
-        print(f"🟦 ขอบเขต: x={min_x:.3f}~{max_x:.3f}, y={min_y:.3f}~{max_y:.3f}")
-        print(f"🎯 จุดกึ่งกลาง: ({center_x:.3f}, {center_y:.3f})")
-        print(f"📍 ตำแหน่งปัจจุบัน: ({x_now:.3f}, {y_now:.3f})")
-        print(f"🔖 marker: {marker}")
+#         print(f"🟦 ขอบเขต: x={min_x:.3f}~{max_x:.3f}, y={min_y:.3f}~{max_y:.3f}")
+#         print(f"🎯 จุดกึ่งกลาง: ({center_x:.3f}, {center_y:.3f})")
+#         print(f"📍 ตำแหน่งปัจจุบัน: ({x_now:.3f}, {y_now:.3f})")
+#         print(f"🔖 marker: {marker}")
 
-        # เดินไปจุดกึ่งกลาง เฉพาะแกนที่มีข้อมูล
-        if ('front' in wall or 'back' in wall):
-            move_direction_pid(ep_chassis, 'x+', center_x - x_now)
-            correct_robot_orientation(ep_chassis, target_yaw=0)
-        if ('left' in wall or 'right' in wall):
-            move_direction_pid(ep_chassis, 'y+', center_y - y_now)
-            correct_robot_orientation(ep_chassis, target_yaw=0)
-    else:
-        # มีกำแพงเดียวหรือไม่เจอกำแพงเลย: หาเสา
-        wall_side = None
-        for k in wall.keys():
-            wall_side = k
-        if ep_gimbal is not None:
-            print("🔎 มีกำแพงเดียวหรือไม่เจอกำแพงเลย กำลังหาเสาเพื่อคำนวณศูนย์กลาง...")
-            position = find_pillar_and_move_to_center(ep_chassis, ep_gimbal, way, tof_wall, tile_size)
-            center_x = position[0]
-            center_y = position[1]
+#         # เดินไปจุดกึ่งกลาง เฉพาะแกนที่มีข้อมูล
+#         if ('front' in wall or 'back' in wall):
+#             move_direction_pid(ep_chassis, 'x+', center_x - x_now)
+#             correct_robot_orientation(ep_chassis, target_yaw=0)
+#         if ('left' in wall or 'right' in wall):
+#             move_direction_pid(ep_chassis, 'y+', center_y - y_now)
+#             correct_robot_orientation(ep_chassis, target_yaw=0)
+#     else:
+#         # มีกำแพงเดียวหรือไม่เจอกำแพงเลย: หาเสา
+#         wall_side = None
+#         for k in wall.keys():
+#             wall_side = k
+#         if ep_gimbal is not None:
+#             print("🔎 มีกำแพงเดียวหรือไม่เจอกำแพงเลย กำลังหาเสาเพื่อคำนวณศูนย์กลาง...")
+#             position = find_pillar_and_move_to_center(ep_chassis, ep_gimbal, way, tof_wall, tile_size)
+#             center_x = position[0]
+#             center_y = position[1]
 
-            # เพิ่มบรรทัดนี้!
-            x_now, y_now = latest_chassis_position[0], latest_chassis_position[1]
+#             # เพิ่มบรรทัดนี้!
+#             x_now, y_now = latest_chassis_position[0], latest_chassis_position[1]
 
-            correct_robot_orientation(ep_chassis, target_yaw=0)
-            move_to_center(ep_chassis, center_x, center_y, get_position_func=lambda: (latest_chassis_position[0], latest_chassis_position[1]))
-            # move_direction_pid(ep_chassis, 'y+', center_y - y_now)
-            correct_robot_orientation(ep_chassis, target_yaw=0)
+#             move_direction_pid(ep_chassis, 'x+', center_x - x_now)
+#             correct_robot_orientation(ep_chassis, target_yaw=0)
+#             move_direction_pid(ep_chassis, 'y+', center_y - y_now)
+#             correct_robot_orientation(ep_chassis, target_yaw=0)
 
-        else:
-            print("❌ ไม่สามารถหาเสาได้ (ไม่ได้ส่ง ep_gimbal มา)")
-def sweep_angles_list(start, end, step):
-    """สร้างลิสต์มุม sweep ที่รองรับทั้งกรณี start < end และ start > end"""
-    if start < end:
-        return list(range(start, end + 1, step))
-    else:
-        return list(range(start, end - 1, -step))
+#         else:
+#             print("❌ ไม่สามารถหาเสาได้ (ไม่ได้ส่ง ep_gimbal มา)")
 
-def find_pillar_and_move_to_center(ep_chassis, ep_gimbal, way, tof_wall, tile_size=0.6):
-    global latest_chassis_position
 
-    if latest_chassis_position is None or len(latest_chassis_position) < 2:
-        print(latest_chassis_position)
-        raise ValueError("latest_chassis_position ยังไม่มีข้อมูล")
 
-    x_now, y_now = latest_chassis_position[0], latest_chassis_position[1]
+# def sweep_angles_list(start, end, step):
+#     """สร้างลิสต์มุม sweep ที่รองรับทั้งกรณี start < end และ start > end"""
+#     if start < end:
+#         return list(range(start, end + 1, step))
+#     else:
+#         return list(range(start, end - 1, -step))
 
-    # [ซ้ายบน, ขวาบน, ซ้ายล่าง, ขวาล่าง] (กวาดช่วงละ 90 องศา)
-    sweep_map = [
-        sweep_angles_list(-135-15, -45-15, 5),  # ซ้ายบน
-        sweep_angles_list(45-15, 135-15, 5),    # ขวาบน
-        sweep_angles_list(-135-15, -45-15, 5),  # ซ้ายล่าง
-        sweep_angles_list(45-15, 135-15, 5),    # ขวาบนล่าง
-    ]
+# def find_pillar_and_move_to_center(ep_chassis, ep_gimbal, way, tof_wall, tile_size=0.6):
+#     global latest_chassis_position
 
-    pillar_yaws = [None, None, None, None]
-    pillar_ds = [None, None, None, None]
+#     # ตรวจสอบค่าก่อน
+#     if latest_chassis_position is None or len(latest_chassis_position) < 2:
+#         print(latest_chassis_position)
+#         raise ValueError("latest_chassis_position ยังไม่มีข้อมูล")
 
-    skip = [False, False, False, False]
-    if way[0] == 0:  # มีกำแพงซ้าย
-        skip[0] = True
-        skip[2] = True
-    if way[2] == 0:  # มีกำแพงขวา
-        skip[1] = True
-        skip[3] = True
-    if way[1] == 0:  # มีกำแพงหน้า
-        skip[0] = True
-        skip[1] = True
-    if way[3] == 0:  # มีกำแพงหลัง
-        skip[2] = True
-        skip[3] = True
+#     # กำหนดตรงนี้แค่ครั้งเดียว!
+#     x_now, y_now = latest_chassis_position[0], latest_chassis_position[1]
 
-    for i in range(4):
-        if skip[i]:
-            print(f"🚧 ข้าม sweep {['ซ้ายบน','ขวาบน','ซ้ายล่าง','ขวาล่าง'][i]} เพราะมี/ติดกำแพง")
-            continue
-        readings = []
-        for yaw in sweep_map[i]:
-            ep_gimbal.moveto(pitch=-6, yaw=yaw, pitch_speed=350, yaw_speed=350).wait_for_completed()
-            d = get_stable_distance_reading() / 1000  # m
-            time.sleep(0.01)
-            readings.append((d, yaw))
-        # เลือกค่าที่ใกล้ที่สุดในช่วง 0.1-0.6m
-        valid = [item for item in readings if 0.1 < item[0] < 0.5]
-        if valid:
-            min_d, min_yaw = min(valid, key=lambda x: x[0])
-            pillar_yaws[i] = min_yaw
-            pillar_ds[i] = min_d
-        else:
-            pillar_yaws[i] = None
-            pillar_ds[i] = None
+#     # [ซ้ายบน, ขวาบน, ซ้ายล่าง, ขวาล่าง]
+#     pillar_yaws = [None, None, None, None]
+#     pillar_ds = [None, None, None, None]
 
-    # คำนวณขอบเขต tile ตามเสาที่หาได้ (เหมือนเดิม)
-    min_x = x_now - tile_size/2
-    max_x = x_now + tile_size/2
-    min_y = (y_now - tile_size/2)
-    max_y = (y_now + tile_size/2)
+#     sweep_map = [
+#         sweep_angles_list(-135, -135, 1),  # ซ้ายบน
+#         sweep_angles_list(135, 135, 1),    # ขวาบน
+#         sweep_angles_list(-45, -45, 1),    # ซ้ายล่าง
+#         sweep_angles_list(45, 45, 1),      # ขวาล่าง
+#     ]
 
-    if way[0] == 0 and tof_wall[0] is not None:
-        min_y = y_now - tof_wall[0]/1000
-        max_y = min_y + tile_size
-    elif pillar_ds[0] is not None:
-        rad = math.radians(pillar_yaws[0])
-        px = x_now + pillar_ds[0] * math.cos(rad)
-        py = y_now + pillar_ds[0] * math.sin(rad)
-        min_y = py
-        max_y = min_y + tile_size
+#     skip = [False, False, False, False]
+#     if way[0] == 0:  # มีกำแพงซ้าย
+#         skip[0] = True  # ข้ามซ้ายบน
+#         skip[2] = True  # ข้ามซ้ายล่าง
+#     if way[2] == 0:  # มีกำแพงขวา
+#         skip[1] = True  # ข้ามขวาบน
+#         skip[3] = True  # ข้ามขวาล่าง
+#     if way[1] == 0:  # มีกำแพงหน้า
+#         skip[0] = True  # ข้ามซ้ายบน
+#         skip[1] = True  # ข้ามขวาบน
+#     if way[3] == 0:  # มีกำแพงหลัง
+#         skip[2] = True  # ข้ามซ้ายล่าง
+#         skip[3] = True  # ข้ามขวาล่าง
 
-    if way[2] == 0 and tof_wall[2] is not None:
-        max_y = y_now + tof_wall[2]/1000
-        min_y = max_y - tile_size
-    elif pillar_ds[2] is not None:
-        rad = math.radians(pillar_yaws[2])
-        px = x_now + pillar_ds[2] * math.cos(rad)
-        py = y_now + pillar_ds[2] * math.sin(rad)
-        max_y = py
-        min_y = max_y - tile_size
+#     for i in range(4):
+#         if skip[i]:
+#             print(f"🚧 ข้าม sweep {['ซ้ายบน','ขวาบน','ซ้ายล่าง','ขวาล่าง'][i]} เพราะมี/ติดกำแพง")
+#             pillar_yaws[i] = None
+#             pillar_ds[i] = None
+#             continue
+#         min_d = None
+#         min_yaw = None
+#         for yaw in sweep_map[i]:
+#             ep_gimbal.moveto(pitch=-6, yaw=yaw, pitch_speed=350, yaw_speed=350).wait_for_completed()
+#             d = get_stable_distance_reading() / 1000  # m
+#             time.sleep(0.01)
+#             if 0.05 < d < 0.6:
+#                 if (min_d is None) or (d < min_d):
+#                     min_d = d
+#                     min_yaw = yaw
+#         pillar_yaws[i] = min_yaw
+#         pillar_ds[i] = min_d
 
-    if way[1] == 0 and tof_wall[1] is not None:
-        max_x = x_now + tof_wall[1]/1000
-        min_x = max_x - tile_size
-    elif pillar_ds[1] is not None:
-        rad = math.radians(pillar_yaws[1])
-        px = x_now + pillar_ds[1] * math.cos(rad)
-        py = y_now + pillar_ds[1] * math.sin(rad)
-        max_x = px
-        min_x = max_x - tile_size
+#     min_x = x_now - tile_size/2
+#     max_x = x_now + tile_size/2
+#     min_y = y_now - tile_size/2
+#     max_y = y_now + tile_size/2
 
-    if way[3] == 0 and tof_wall[3] is not None:
-        min_x = x_now - tof_wall[3]/1000
-        max_x = min_x + tile_size
-    elif pillar_ds[3] is not None:
-        rad = math.radians(pillar_yaws[3])
-        px = x_now + pillar_ds[3] * math.cos(rad)
-        py = y_now + pillar_ds[3] * math.sin(rad)
-        min_x = px
-        max_x = min_x + tile_size
+#     # ใช้ข้อมูลกำแพงถ้ามี
+#     if way[0] == 0 and tof_wall[0] is not None:
+#         min_y = y_now - tof_wall[0]
+#         max_y = min_y + tile_size
+#     elif pillar_ds[0] is not None:
+#         rad = math.radians(pillar_yaws[0])
+#         px = x_now + pillar_ds[0] * math.cos(rad)
+#         py = y_now + pillar_ds[0] * math.sin(rad)
+#         min_y = py
+#         max_y = min_y + tile_size
 
-    center_x = (min_x + max_x) / 2
-    center_y = (min_y + max_y) / 2
+#     if way[2] == 0 and tof_wall[2] is not None:
+#         max_y = y_now + tof_wall[2]
+#         min_y = max_y - tile_size
+#     elif pillar_ds[2] is not None:
+#         rad = math.radians(pillar_yaws[2])
+#         px = x_now + pillar_ds[2] * math.cos(rad)
+#         py = y_now + pillar_ds[2] * math.sin(rad)
+#         max_y = py
+#         min_y = max_y - tile_size
 
-    print(f"🟦 Pillar min/max: x={min_x:.3f}~{max_x:.3f}, y={min_y:.3f}~{max_y:.3f}")
-    print(f"🎯 Pillar center: ({center_x:.3f}, {center_y:.3f})")
+#     if way[1] == 0 and tof_wall[1] is not None:
+#         max_x = x_now + tof_wall[1]
+#         min_x = max_x - tile_size
+#     elif pillar_ds[1] is not None:
+#         rad = math.radians(pillar_yaws[1])
+#         px = x_now + pillar_ds[1] * math.cos(rad)
+#         py = y_now + pillar_ds[1] * math.sin(rad)
+#         max_x = px
+#         min_x = max_x - tile_size
 
-    return (center_x, center_y)
+#     if way[3] == 0 and tof_wall[3] is not None:
+#         min_x = x_now - tof_wall[3]
+#         max_x = min_x + tile_size
+#     elif pillar_ds[3] is not None:
+#         rad = math.radians(pillar_yaws[3])
+#         px = x_now + pillar_ds[3] * math.cos(rad)
+#         py = y_now + pillar_ds[3] * math.sin(rad)
+#         min_x = px
+#         max_x = min_x + tile_size
+
+#     center_x = (min_x + max_x) / 2
+#     center_y = (min_y + max_y) / 2
+
+#     return (center_x, center_y)
 
 # def get_stable_distance_reading():
 #     """
@@ -718,9 +660,9 @@ def move_to_center(ep_chassis, target_x, target_y, get_position_func, tolerance=
 
     # สร้าง PID ถ้ายังไม่มี
     if move_pid_x is None:
-        move_pid_x = PID(kp=2.0*0.6, ki=0.01*0.6, kd=0)
+        move_pid_x = PID(kp=2.0, ki=0.01, kd=0)
     if move_pid_y is None:
-        move_pid_y = PID(kp=2.0*0.6, ki=0.01*0.6, kd=0)
+        move_pid_y = PID(kp=2.0, ki=0.01, kd=0)
 
     move_pid_x.reset()
     move_pid_y.reset()
@@ -747,7 +689,7 @@ def move_to_center(ep_chassis, target_x, target_y, get_position_func, tolerance=
 
         if dist < tolerance:
             stable_count += 1
-            if stable_count > 50:
+            if stable_count > 20:
                 break
         else:
             stable_count = 0
