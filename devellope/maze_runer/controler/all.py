@@ -130,81 +130,90 @@ class MarkerInfo:
         return str(self._info)
 
 def on_detect_marker(marker_info):
+    """
+    เวอร์ชันปรับปรุง:
+    - ฟังก์ชันนี้มีหน้าที่แค่อัปเดต global variable `markers` ด้วยข้อมูลล่าสุดที่เจอ
+    - ไม่ต้องล้างค่า (clear) หรือบันทึก log เองแล้ว
+    """
     global markers
     x, y, w, h, info = marker_info[0]
-    markers.clear()  # <<== เพิ่มบรรทัดนี้
-    markers.append(MarkerInfo(x, y, w, h, info))
-    log_robot_data()
+    # อัปเดตลิสต์ให้มีแค่มาร์คเกอร์ล่าสุดที่เจอเสมอ
+    markers = [MarkerInfo(x, y, w, h, info)]
 
 
 
 def correct_robot_orientation( target_yaw=0):
     """
-    ปรับให้หุ่นยนต์หันตรงตามเป้าหมาย
-    
-    Args:
-        ep_chassis: chassis controller
-        target_yaw (float): มุม yaw เป้าหมาย (องศา)
+    เวอร์ชันปรับปรุงใหม่: เรียบง่าย เสถียร และเข้าใจง่ายขึ้น
+    - ปรับแก้ค่า PID ให้สมดุล ลดอาการหมุนเลย (Overshoot)
+    - เพิ่ม Kd เพื่อช่วยเบรก
+    - ใช้เงื่อนไขการหยุดที่แม่นยำกว่าเดิม
     """
-    global turn_pid, latest_chassis_attitude
+    global latest_chassis_attitude
     
-    # เริ่มต้น PID สำหรับการหมุน
-    if turn_pid is None:
-        turn_pid = TurnPID(kp=1.0*0.7, ki=0.1*0.7, kd=0)
+    # --- 1. ตั้งค่า PID ที่สมดุล ---
+    # Kp: ความเร็วในการตอบสนองต่อ error ปัจจุบัน
+    # Ki: ช่วยลด error ค้างนิ่งๆ (steady-state error) แต่ถ้ามากไปจะทำให้หมุนเลย
+    # Kd: ช่วยเบรกเมื่อใกล้ถึงเป้าหมาย ป้องกันการหมุนเลย
+    kp = 1.2
+    ki = 0.05 
+    kd = 0.02
     
-    turn_pid.reset()
+    integral = 0
+    last_error = 0
     
-    current_yaw = latest_chassis_attitude[0]
-    yaw_error = target_yaw - current_yaw
+    # --- 2. ตั้งค่าการทำงาน ---
+    tolerance_deg = 0.05  # ความผิดพลาดของมุมที่ยอมรับได้ (องศา)
+    timeout_sec = 3.0    # ระยะเวลาสูงสุดในการปรับทิศทาง
     
-    # ปรับให้อยู่ในช่วง -180 ถึง 180
-    while yaw_error > 180:
-        yaw_error -= 360
-    while yaw_error < -180:
-        yaw_error += 360
+    start_time = time.time()
     
-    print(f"🧭 ปรับทิศทาง: ปัจจุบัน {current_yaw:.1f}° -> เป้าหมาย {target_yaw:.1f}° (ต้องหมุน {yaw_error:.1f}°)")
-    
-    # ถ้าผิดพลาดน้อยกว่า 2 องศา ไม่ต้องปรับ
-    if abs(yaw_error) < 0.05:
-        print("✅ ทิศทางถูกต้องแล้ว")
-        return
-    
-    tolerance = 0.05  # ความคลาดเคลื่อนที่ยอมรับได้
-    stable_count = 0
-    max_iterations = 120
-    iteration = 0
-    
-    while iteration < max_iterations:
-        iteration += 1
-        
+    print(f"🧭 Adjusting orientation...")
+
+    while time.time() - start_time < timeout_sec:
         current_yaw = latest_chassis_attitude[0]
         
-        # คำนวณ PID output
-        turn_output, angle_error, p, i, d = turn_pid.compute(target_yaw, current_yaw)
+        # --- 3. คำนวณ Error ให้สั้นที่สุด (-180 ถึง 180) ---
+        error = target_yaw - current_yaw
+        while error > 180: error -= 360
+        while error < -180: error += 360
+
+        # --- 4. คำนวณ PID Output ---
+        integral += error * 0.02  # 0.02 คือเวลาโดยประมาณของ 1 loop
+        derivative = (error - last_error) / 0.02
+        last_error = error
         
-        # จำกัดความเร็วการหมุน
-        max_turn_speed = 100  # องศา/วินาที
-        turn_speed = max(-max_turn_speed, min(max_turn_speed, turn_output))
+        # จำกัดค่า integral ไม่ให้สะสมมากเกินไป (Anti-windup)
+        integral = max(-50, min(50, integral))
+
+        turn_speed = (kp * error) + (ki * integral) + (kd * derivative)
         
-        # แสดงความคืบหน้า
-        if iteration % 10 == 0:
-            print(f"   🔄 ปัจจุบัน: {current_yaw:.1f}° ผิดพลาด: {angle_error:.1f}° ความเร็ว: {turn_speed:.1f}°/s")
-        
-        # ตรวจสอบว่าถึงเป้าหมายแล้ว
-        if abs(angle_error) < tolerance:
-            stable_count += 1
-            if stable_count >= 30:
-                print("✅ ปรับทิศทางเสร็จ!")
-                break
-        else:
-            stable_count = 0
-        
-        # สั่งหมุน chassis
+        # --- 5. จำกัดความเร็ว ---
+        max_speed = 80  # องศา/วินาที
+        min_speed = 5   # ความเร็วขั้นต่ำเพื่อขยับ (แก้ปัญหาแรงเสียดทาน)
+
+        if abs(turn_speed) > max_speed:
+            turn_speed = max_speed if turn_speed > 0 else -max_speed
+        # ถ้า error น้อยมาก แต่ยังไม่ถึงเป้า ให้ใช้ความเร็วขั้นต่ำ
+        elif 0 < abs(error) < tolerance_deg * 2 and abs(turn_speed) < min_speed:
+             turn_speed = min_speed if error > 0 else -min_speed
+
+        # สั่งให้หุ่นยนต์หมุน
         ep_chassis.drive_speed(x=0, y=0, z=turn_speed)
-        time.sleep(0.01)
-    
-    # หยุดการหมุน
+
+        # --- 6. เงื่อนไขการหยุด ---
+        # หยุดเมื่อ error น้อย และความเร็วในการหมุนต่ำมาก (แสดงว่าหยุดนิ่งแล้ว)
+        if abs(error) < tolerance_deg and abs(turn_speed) < 3:
+            print(f"✅ Orientation corrected. Final Yaw: {current_yaw:.2f}° (Error: {error:.2f}°)")
+            break
+        
+        time.sleep(0.02) # Loop หน่วงเวลา
+    else:
+        # กรณีหมดเวลา (Timeout)
+        current_yaw = latest_chassis_attitude[0]
+        print(f"⚠️ Orientation timeout. Final Yaw: {current_yaw:.2f}° (Error: {error:.2f}°)")
+
+    # หยุดสนิท
     ep_chassis.drive_speed(x=0, y=0, z=0)
     time.sleep(0.1)
 
@@ -639,10 +648,10 @@ def find_pillar_and_move_to_center(ep_chassis, ep_gimbal, way, tof_wall, tile_si
     # --- 1. กำหนดมุมกวาดที่ถูกต้องและชัดเจน ---
     PILLAR_NAMES = ["FORWARD_LEFT (+x, -y)", "FORWARD_RIGHT (+x, +y)", "BACK_LEFT (-x, -y)", "BACK_RIGHT (-x, +y)"]
     SWEEP_RANGES = [
-        (-80, -10, 10),    # FORWARD_LEFT -> ศูนย์กลางที่ -45
-        (10, 80, 10),      # FORWARD_RIGHT -> ศูนย์กลางที่ +45
-        (-170, -100, 10),  # BACK_LEFT -> ศูนย์กลางที่ -135
-        (100, 170, 10),    # BACK_RIGHT -> ศูนย์กลางที่ +135
+        (-80, -10, 5),    # FORWARD_LEFT -> ศูนย์กลางที่ -45
+        (10, 80, 5),      # FORWARD_RIGHT -> ศูนย์กลางที่ +45
+        (-170, -100, 5),  # BACK_LEFT -> ศูนย์กลางที่ -135
+        (100, 170, 5),    # BACK_RIGHT -> ศูนย์กลางที่ +135
     ]
 
     skip_sweep = [False] * 4
@@ -662,20 +671,22 @@ def find_pillar_and_move_to_center(ep_chassis, ep_gimbal, way, tof_wall, tile_si
         readings = []
         sweep_angles = sweep_angles_list(*SWEEP_RANGES[i])
         for yaw in sweep_angles:
-            ep_gimbal.moveto(pitch=-6, yaw=yaw, pitch_speed=50, yaw_speed=50).wait_for_completed()
+            ep_gimbal.moveto(pitch=-6, yaw=yaw, pitch_speed=100, yaw_speed=100).wait_for_completed()
             dist_m = get_stable_distance_reading() / 1000.0
             readings.append((dist_m, yaw))
 
-        valid_readings = [r for r in readings if 0.1 < r[0] < tile_size * 1.5]
+        # กรองเฉพาะระยะที่สมเหตุสมผล (ไม่ไกลเกิน tile_size)
+        valid_readings = [r for r in readings if 0.1 < r[0] < tile_size]
+        
         if valid_readings:
             min_dist, min_yaw = min(valid_readings, key=lambda x: x[0])
             rad = math.radians(min_yaw)
             px = x_now + min_dist * math.cos(rad)
             py = y_now + min_dist * math.sin(rad)
             pillar_coords[i] = (px, py)
-            print(f"  📌 Found {PILLAR_NAMES[i]} at ({px:.3f}, {py:.3f})")
+            print(f"  📌 Found {PILLAR_NAMES[i]} at ({px:.3f}, {py:.3f}) [dist: {min_dist:.3f}m]")
         else:
-            print(f"  ❌ Did not find {PILLAR_NAMES[i]}.")
+            print(f"  ❌ Did not find {PILLAR_NAMES[i]} (all readings > {tile_size}m or < 0.1m).")
 
     # --- 3. ตรวจสอบความน่าเชื่อถือ (Sanity Check) ---
     found_pillars_count = sum(1 for p in pillar_coords if p is not None)
@@ -899,7 +910,7 @@ def move_gimbal(ep_gimbal, ep_chassis, ep_vision, ep_camera):
     # sweep 4 ทิศ เก็บค่าก่อน
     yaws = [-90, 0, 90, 180]
     for i, yaw in enumerate(yaws):
-        ep_gimbal.moveto(pitch=-6, yaw=yaw, pitch_speed=25, yaw_speed=25).wait_for_completed()
+        ep_gimbal.moveto(pitch=-6, yaw=yaw, pitch_speed=200, yaw_speed=200).wait_for_completed()
         time.sleep(0.1)
         stable_distance = get_stable_distance_reading()
         stable_distances[i] = stable_distance
@@ -1000,6 +1011,7 @@ def explore_from(current_coords, ep_chassis, ep_gimbal, ep_vision, ep_camera):
     - ตรวจสอบขอบเขตแผนที่ 7x7 ภายในตัว
     - แก้ไขปัญหาการอ่านค่า STEP_SIZE
     """
+    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>",current_coords)
     global visited_nodes, scan_memory, maze_graph, coord_to_node_id
 
     # =======================================================================
@@ -1169,7 +1181,7 @@ if __name__ == '__main__':
     print(f"🗺️  Map System เริ่มต้นแล้ว")
 
     try:
-        start_node = (0, 0)
+        start_node = (0,0.6*2)
         explore_from(start_node, ep_chassis, ep_gimbal, ep_vision, ep_camera)
 
         
